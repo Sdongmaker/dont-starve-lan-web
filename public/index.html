@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>荒野余烬 · 局域网饥荒联机版</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <!-- ==================== 局域网联机大厅 ==================== -->
+  <div id="lobby-screen" class="lobby-screen">
+    <div class="lobby-backdrop"></div>
+    <div class="lobby-wrapper">
+      <header class="lobby-header">
+        <div class="brand-block">
+          <div class="brand-emblem">🔥</div>
+          <div>
+            <h1>荒野余烬 · 饥荒局域网联机版</h1>
+            <p class="subtitle">纯网页零插件 · 多人合作生存 · 昼夜四季 · 科技烹饪 · 巨鹿讨伐</p>
+          </div>
+        </div>
+        <div class="lan-share-bar">
+          <span class="lan-label">🌐 局域网联机地址：</span>
+          <code id="lan-url-text">正在获取本机局域网 IP...</code>
+          <button id="btn-copy-lan" class="btn btn-small btn-gold">复制地址发给好友</button>
+        </div>
+      </header>
+
+      <div class="lobby-grid">
+        <!-- 左侧：幸存者身份与角色选择 -->
+        <section class="parchment-card survivor-panel">
+          <div class="card-title-row">
+            <h2>🎭 选择你的幸存者</h2>
+            <div class="name-input-group">
+              <label for="player-name-input">昵称：</label>
+              <input id="player-name-input" type="text" maxlength="14" placeholder="输入你的名字" />
+            </div>
+          </div>
+
+          <div id="char-grid" class="char-grid"></div>
+
+          <div id="char-detail" class="char-detail">
+            <canvas id="char-preview-canvas" width="110" height="125"></canvas>
+            <div class="char-detail-info">
+              <div class="char-detail-head">
+                <h3 id="detail-char-name">威尔逊</h3>
+                <span id="detail-char-title" class="badge">绅士科学家</span>
+              </div>
+              <p id="detail-char-motto" class="motto"></p>
+              <div class="stat-pills">
+                <span class="pill pill-hp">❤️ 生命 <b id="detail-hp">150</b></span>
+                <span class="pill pill-hunger">🍖 饥饿 <b id="detail-hunger">150</b></span>
+                <span class="pill pill-sanity">🧠 理智 <b id="detail-sanity">200</b></span>
+              </div>
+              <ul id="detail-char-perks" class="perk-list"></ul>
+            </div>
+          </div>
+        </section>
+
+        <!-- 右侧：房间列表、建房与存档读取 -->
+        <section class="parchment-card rooms-panel">
+          <div class="tab-bar">
+            <button class="tab-btn active" data-tab="join">🏕️ 在线房间列表</button>
+            <button class="tab-btn" data-tab="create">✨ 创建新世界</button>
+            <button class="tab-btn" data-tab="saves">📂 读取历史存档</button>
+          </div>
+
+          <!-- Tab 1: 加入房间 -->
+          <div id="tab-join" class="tab-content active">
+            <div class="section-bar">
+              <span>局域网正在运行的世界：</span>
+              <button id="btn-refresh-rooms" class="btn btn-small">🔄 刷新</button>
+            </div>
+            <div id="room-list" class="room-list"></div>
+          </div>
+
+          <!-- Tab 2: 创建新房间 -->
+          <div id="tab-create" class="tab-content">
+            <div class="form-group">
+              <label>世界房间名称</label>
+              <input id="create-room-name" type="text" maxlength="20" value="饥荒快乐联机营地" />
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>开局季节</label>
+                <select id="create-season">
+                  <option value="autumn" selected>🍂 秋季开局（推荐，气候温和）</option>
+                  <option value="spring">🌧️ 春季开局（多雨复苏）</option>
+                  <option value="winter">❄️ 冬季开局（严寒硬核挑战）</option>
+                  <option value="summer">☀️ 夏季开局（酷暑冷火挑战）</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>生存难度与复活规则</label>
+                <select id="create-difficulty">
+                  <option value="standard" selected>🛡️ 标准合作（试金石/救赎心/绚丽门皆可复活）</option>
+                  <option value="hardcore">💀 硬核饥荒（仅试金石/救赎心/护符可复活）</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>玩家对抗 (PvP)</label>
+                <select id="create-pvp">
+                  <option value="0" selected>🤝 纯合作生存（关闭玩家互伤）</option>
+                  <option value="1">⚔️ 开启 PvP（允许攻击其他玩家）</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>世界随机种子（选填）</label>
+                <input id="create-seed" type="text" maxlength="24" placeholder="留空自动随机生成地图" />
+              </div>
+            </div>
+            <button id="btn-create-room" class="btn btn-primary btn-large">🔥 生成世界并进入荒野</button>
+          </div>
+
+          <!-- Tab 3: 读取存档 -->
+          <div id="tab-saves" class="tab-content">
+            <p class="hint-text">服务端自动保存与房主手动保存的世界均在此处，点击即可恢复全部建筑与角色背包继续联机！</p>
+            <div id="save-list" class="room-list"></div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== 游戏主画面 ==================== -->
+  <div id="game-screen" class="game-screen hidden">
+    <canvas id="game-canvas"></canvas>
+
+    <!-- 顶部快捷控制条 -->
+    <div class="top-left-bar">
+      <span id="hud-room-title" class="room-badge">🏕️ 荒野营地</span>
+      <span id="hud-ping" class="ping-badge">1 ms</span>
+      <button id="btn-ingame-copy" class="hud-btn" title="复制局域网地址邀请好友">🔗 邀请好友</button>
+      <button id="btn-map" class="hud-btn" title="打开世界大地图 (M)">🗺️ 地图 (M)</button>
+      <button id="btn-guide" class="hud-btn" title="查看生存与食谱指南">📖 指南</button>
+      <button id="btn-mute" class="hud-btn" title="开关音效">🔊 音效</button>
+      <button id="btn-save-world" class="hud-btn host-only hidden" title="立即保存世界到硬盘">💾 存档</button>
+      <button id="btn-toggle-pvp" class="hud-btn host-only hidden" title="切换 PvP 状态">🛡️ 合作</button>
+      <button id="btn-leave-room" class="hud-btn btn-danger-subtle">🚪 大厅</button>
+    </div>
+
+    <!-- 顶部中央世界横幅与浮动提示 -->
+    <div id="event-banner" class="event-banner hidden"></div>
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- 鬼魂状态提示条 -->
+    <div id="ghost-bar" class="ghost-bar hidden">
+      <span>👻 你已化作鬼魂！可按【空格】或点击【远古试金石】作祟复活，或请队友制作【救赎之心】救活你（标准模式也可回中心绚丽之门重生）</span>
+    </div>
+
+    <!-- 建造选址提示条 -->
+    <div id="placement-bar" class="placement-bar hidden">
+      <span id="placement-text">🔨 建造预览中：左键点击地面放置，按住 Shift 可连续建造，右键或 Esc 取消</span>
+      <button id="btn-cancel-place" class="btn btn-small">取消 (Esc)</button>
+    </div>
+
+    <!-- 左侧科技合成栏 -->
+    <aside class="craft-sidebar">
+      <div id="craft-categories" class="craft-categories"></div>
+      <div id="craft-drawer" class="craft-drawer hidden">
+        <div class="drawer-header">
+          <span id="drawer-title">工具制作</span>
+          <span id="tech-indicator" class="tech-badge">徒手科技</span>
+          <button id="btn-close-drawer" class="icon-close">✕</button>
+        </div>
+        <div id="recipe-list" class="recipe-list"></div>
+      </div>
+    </aside>
+
+    <!-- 右侧时钟、季节、三维圆形仪表盘与小地图 -->
+    <aside class="hud-right">
+      <div class="clock-box">
+        <canvas id="clock-canvas" width="118" height="118"></canvas>
+        <div class="season-strip">
+          <span id="hud-season-text">🍂 秋季 1/5</span>
+          <span id="hud-weather-text">☀️ 晴</span>
+        </div>
+      </div>
+
+      <div class="status-gauges">
+        <div class="gauge" id="gauge-hunger" title="饥饿值：归零会持续扣血">
+          <div class="gauge-fill hunger-fill" id="fill-hunger"></div>
+          <div class="gauge-inner">
+            <span class="gauge-icon">🍖</span>
+            <span class="gauge-num" id="num-hunger">150</span>
+          </div>
+          <span class="gauge-label">饥饿</span>
+        </div>
+
+        <div class="gauge" id="gauge-sanity" title="理智值：过低会出现幻觉与暗影梦魇怪">
+          <div class="gauge-fill sanity-fill" id="fill-sanity"></div>
+          <div class="gauge-inner">
+            <span class="gauge-icon">🧠</span>
+            <span class="gauge-num" id="num-sanity">200</span>
+          </div>
+          <span class="gauge-label">理智</span>
+        </div>
+
+        <div class="gauge" id="gauge-hp" title="生命值：归零会死亡变成鬼魂">
+          <div class="gauge-fill hp-fill" id="fill-hp"></div>
+          <div class="gauge-inner">
+            <span class="gauge-icon">❤️</span>
+            <span class="gauge-num" id="num-hp">150</span>
+          </div>
+          <span class="gauge-label">生命</span>
+        </div>
+      </div>
+
+      <div class="env-pills">
+        <div id="pill-temp" class="env-pill" title="体感温度（低于0℃冻伤，高于70℃中暑）">🌡️ 25℃</div>
+        <div id="pill-wet" class="env-pill" title="潮湿度（淋雨增加潮湿降低理智）">💧 0%</div>
+      </div>
+
+      <div class="minimap-frame" id="minimap-box" title="点击打开大地图 (M)">
+        <canvas id="minimap-canvas" width="152" height="152"></canvas>
+        <span class="minimap-caption">按 M 展开地图</span>
+      </div>
+    </aside>
+
+    <!-- 储物箱 / 冰箱 / 烹饪锅 交互面板 -->
+    <div id="container-panel" class="container-panel hidden">
+      <div class="container-header">
+        <h3 id="container-title">📦 储物箱</h3>
+        <button id="btn-close-container" class="icon-close">✕</button>
+      </div>
+      <div id="container-body" class="container-body"></div>
+    </div>
+
+    <!-- 左下角聊天与事件记录 -->
+    <div class="chat-panel">
+      <div id="chat-messages" class="chat-messages"></div>
+      <div class="chat-input-row">
+        <input id="chat-input" type="text" maxlength="120" placeholder="按 Enter 聊天交流..." />
+        <button id="btn-send-chat" class="btn btn-small">发送</button>
+      </div>
+    </div>
+
+    <!-- 底部物品栏与三格装备栏 -->
+    <div class="bottom-dock">
+      <div class="controls-hint">
+        <span><b>WASD/左键</b> 移动交互</span>
+        <span><b>空格</b> 自动采集/拾取</span>
+        <span><b>F</b> 自动攻击走A</span>
+        <span><b>右键物品</b> 烤肉/种树</span>
+        <span><b>Shift+点击</b> 丢弃</span>
+      </div>
+      <div class="inventory-bar-wrap">
+        <div id="inventory-slots" class="inventory-slots"></div>
+        <div class="equip-divider"></div>
+        <div id="equip-slots" class="equip-slots"></div>
+      </div>
+    </div>
+
+    <!-- 悬浮物品详情提示框 -->
+    <div id="item-tooltip" class="item-tooltip hidden"></div>
+
+    <!-- 全屏世界大地图弹窗 -->
+    <div id="map-modal" class="modal-overlay hidden">
+      <div class="map-modal-box parchment-card">
+        <div class="modal-header">
+          <h2>🗺️ 荒野全境舆图（实时显示队友与基地地标）</h2>
+          <button id="btn-close-map" class="icon-close">✕</button>
+        </div>
+        <div class="map-canvas-wrap">
+          <canvas id="worldmap-canvas" width="660" height="660"></canvas>
+          <div class="map-legend">
+            <span><i style="background:#6d914f"></i>绚丽出生点</span>
+            <span><i style="background:#7d9948"></i>丰饶草原</span>
+            <span><i style="background:#3a5937"></i>幽暗松林</span>
+            <span><i style="background:#91673b"></i>猪王桦木林</span>
+            <span><i style="background:#7a7970"></i>乱石矿区</span>
+            <span><i style="background:#483754"></i>毒雾沼泽</span>
+            <span>⭐ 绿点：你与队友</span>
+            <span>⚡ 菱形：试金石</span>
+            <span>👑 皇冠：猪王</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 荒野生存手册弹窗 -->
+    <div id="guide-modal" class="modal-overlay hidden">
+      <div class="guide-modal-box parchment-card">
+        <div class="modal-header">
+          <h2>📖 荒野求生联机宝典</h2>
+          <button id="btn-close-guide" class="icon-close">✕</button>
+        </div>
+        <div class="guide-content">
+          <div class="guide-card">
+            <h3>🌑 第一夜保命法则</h3>
+            <p>白昼尽快收集<b>干草、树枝、燧石、浆果</b>，制作斧头砍树。黑夜降临前务必制作<b>火把</b>或放置<b>营火</b>！完全处于黑暗超过5秒会遭到【黑夜查理】致命袭击！</p>
+          </div>
+          <div class="guide-card">
+            <h3>🔬 科技与基地建设</h3>
+            <p>去东北<b>乱石矿区</b>挖金脉矿（或拿肉去西南桦木林找<b>猪王</b>换金块），建造<b>科学机器（一本）</b>与<b>炼金引擎（二本）</b>。站在机器旁即可解锁新配方，首次制作永久学会且<b>+15理智</b>！</p>
+          </div>
+          <div class="guide-card">
+            <h3>🍲 烹饪锅与食物</h3>
+            <p>站在营火旁<b>右键点击背包里的生食</b>可直接烤熟（烤绿蘑菇回+15理智！）。建造<b>烹饪锅</b>后，放入【1块怪物肉 + 3个浆果/蘑菇/冰块】即可炖出神级口粮<b>浓香肉丸</b>！</p>
+          </div>
+          <div class="guide-card">
+            <h3>❄️ 四季与体温</h3>
+            <p>每季5天：<b>冬季</b>需做冬帽、保暖石靠近火坑蓄热，提防<b>独眼巨鹿Boss</b>；<b>春季</b>多雨需猪皮伞/眼球伞防潮；<b>夏季</b>需<b>吸热冷火坑（硝石燃料）</b>与冰块防暑降温！</p>
+          </div>
+          <div class="guide-card">
+            <h3>⚔️ 走A战斗与复活</h3>
+            <p>怪物攻击有明显蓄力前摇，按 <b>F</b> 攻击两下后拉开一步即可无伤风筝！阵亡变鬼魂后，队友可用<b>救赎之心</b>救活你，或自己飘去找地图四角的<b>远古试金石</b>作祟复活！</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/js/main.js"></script>
+</body>
+</html>

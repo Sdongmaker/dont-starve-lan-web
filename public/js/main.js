@@ -1,0 +1,526 @@
+// 客户端总控入口：大厅交互、网络同步、键鼠操作与 60FPS 渲染调度
+import { NetClient } from './net.js';
+import { WorldRenderer } from './renderer.js';
+import { GameUI } from './ui.js';
+import { sound } from './audio.js';
+import { ENTITY_DEFS } from '../shared/entities.js';
+
+// 持久化本地玩家身份标识（断线重连或读档自动恢复角色背包！）
+function getOrCreatePlayerToken() {
+  let tk = localStorage.getItem('starve_player_token');
+  if (!tk) {
+    tk = `tk_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    localStorage.setItem('starve_player_token', tk);
+  }
+  return tk;
+}
+
+const app = {
+  playerToken: getOrCreatePlayerToken(),
+  selectedCharId: localStorage.getItem('starve_char_id') || 'wilson',
+  lanUrls: [],
+  inGame: false,
+  isHost: false,
+  pvp: false,
+  selfId: null,
+  worldStatic: null,
+  latestState: null,
+  mapLandmarks: [],
+  placementMode: null, // { recipeId, structure }
+  mouseScreen: { x: 0, y: 0 },
+  mouseWorld: { x: 0, y: 0 },
+  hoverTarget: null,
+  keys: new Set(),
+  lastMoveSent: { x: 0, y: 0 },
+};
+
+const canvas = document.getElementById('game-canvas');
+const renderer = new WorldRenderer(canvas);
+
+const ui = new GameUI({
+  getSelfCharId: () => {
+    const me = app.latestState?.players?.find((p) => p.id === app.selfId);
+    return me?.charId || app.selectedCharId;
+  },
+  onCraft: (recipeId) => {
+    net.send({ type: 'craft', recipeId });
+  },
+  onStartPlacement: (recipe) => {
+    app.placementMode = { recipeId: recipe.id, structure: recipe.structure, name: recipe.name };
+    document.getElementById('placement-bar').classList.remove('hidden');
+    document.getElementById('placement-text').textContent =
+      `🔨 正在选址建造【${recipe.name}】：左键地面放置（按住 Shift 连续建造），右键或 Esc 取消`;
+  },
+  onUseSlot: (slotIndex, secondary) => {
+    net.send({ type: 'use_slot', slotIndex, secondary });
+  },
+  onDropSlot: (slotIndex, one) => {
+    net.send({ type: 'drop_slot', slotIndex, one });
+  },
+  onUnequip: (slot) => {
+    net.send({ type: 'unequip', slot });
+  },
+  onContainerTransfer: (entityId, from, index) => {
+    net.send({ type: 'container_transfer', entityId, from, index });
+  },
+  onStartCooking: (entityId) => {
+    net.send({ type: 'cook_pot_start', entityId });
+  },
+  onCloseContainer: () => {
+    if (app.latestState?.self) {
+      net.send({ type: 'click_ground', x: renderer.camX, y: renderer.camY });
+    }
+  },
+  onRequestCraftRefresh: () => {
+    if (app.latestState) {
+      ui.updateHUD(app.latestState, app.selfId, app.worldStatic, app.mapLandmarks);
+    }
+  },
+});
+
+const net = new NetClient({
+  onOpen: () => {
+    net.send({ type: 'refresh_lobby' });
+  },
+  onPing: (ms) => {
+    document.getElementById('hud-ping').textContent = `${ms} ms`;
+  },
+  onClose: () => {
+    if (app.inGame) {
+      ui.showToast('⚠️ 与局域网主机连接断开，正在尝试自动重连...');
+    }
+  },
+  onMessage: (msg) => handleServerMessage(msg),
+});
+
+function handleServerMessage(msg) {
+  switch (msg.type) {
+    case 'welcome':
+    case 'lobby_update': {
+      if (msg.lanUrls) {
+        app.lanUrls = msg.lanUrls;
+        document.getElementById('lan-url-text').textContent = msg.lanUrls[0] || window.location.origin;
+      }
+      ui.renderLobbyLists(
+        msg.rooms || [],
+        msg.saves || [],
+        (roomId) => joinRoom(roomId),
+        (saveId, roomName) => createRoomFromSave(saveId, roomName)
+      );
+      break;
+    }
+
+    case 'joined_room': {
+      app.inGame = true;
+      app.selfId = msg.selfId;
+      app.isHost = Boolean(msg.isHost);
+      app.pvp = Boolean(msg.pvp);
+      app.worldStatic = msg.worldStatic;
+      app.mapLandmarks = msg.mapLandmarks || [];
+      app.latestState = null;
+      app.placementMode = null;
+
+      ui.bakeStaticMap(msg.worldStatic);
+      document.getElementById('lobby-screen').classList.add('hidden');
+      document.getElementById('game-screen').classList.remove('hidden');
+      document.getElementById('hud-room-title').textContent = `🏕️ ${msg.roomName}`;
+      updateHostButtons();
+      renderer.resize();
+      break;
+    }
+
+    case 'left_room': {
+      app.inGame = false;
+      app.latestState = null;
+      document.getElementById('game-screen').classList.add('hidden');
+      document.getElementById('lobby-screen').classList.remove('hidden');
+      ui.renderLobbyLists(
+        msg.rooms || [],
+        msg.saves || [],
+        (roomId) => joinRoom(roomId),
+        (saveId, roomName) => createRoomFromSave(saveId, roomName)
+      );
+      break;
+    }
+
+    case 'host_changed': {
+      app.isHost = Boolean(msg.isHost);
+      updateHostButtons();
+      if (app.isHost) ui.showToast('👑 你已成为当前房间的新房主！');
+      break;
+    }
+
+    case 'room_config': {
+      app.pvp = Boolean(msg.pvp);
+      updateHostButtons();
+      break;
+    }
+
+    case 'state': {
+      app.latestState = msg;
+      if (msg.mapLandmarks) {
+        app.mapLandmarks = msg.mapLandmarks;
+      }
+      if (msg.fx) {
+        renderer.ingestFx(msg.fx, performance.now() / 1000);
+        for (const fx of msg.fx) {
+          if (fx.kind === 'sfx_global') sound.play(fx.sfx);
+          else sound.play(fx.kind);
+        }
+      }
+      ui.updateHUD(msg, app.selfId, app.worldStatic, app.mapLandmarks);
+      break;
+    }
+
+    case 'chat': {
+      ui.appendChat(msg.sender, msg.text, msg.color);
+      break;
+    }
+
+    case 'banner': {
+      ui.showBanner(msg.text, msg.tone);
+      break;
+    }
+
+    case 'toast': {
+      ui.showToast(msg.text);
+      break;
+    }
+
+    case 'error': {
+      alert(msg.message);
+      break;
+    }
+
+    default:
+      break;
+  }
+}
+
+function updateHostButtons() {
+  document.querySelectorAll('.host-only').forEach((el) => {
+    el.classList.toggle('hidden', !app.isHost);
+  });
+  const pvpBtn = document.getElementById('btn-toggle-pvp');
+  pvpBtn.textContent = app.pvp ? '⚔️ PvP开' : '🛡️ 合作';
+}
+
+function getPlayerName() {
+  const input = document.getElementById('player-name-input');
+  const val = input.value.trim() || `幸存者${Math.floor(100 + Math.random() * 899)}`;
+  input.value = val;
+  localStorage.setItem('starve_player_name', val);
+  return val;
+}
+
+function joinRoom(roomId) {
+  net.send({
+    type: 'join_room',
+    roomId,
+    playerName: getPlayerName(),
+    charId: app.selectedCharId,
+    playerToken: app.playerToken,
+  });
+}
+
+function createRoomFromSave(saveId, roomName) {
+  net.send({
+    type: 'create_room',
+    roomName,
+    loadSaveId: saveId,
+    playerName: getPlayerName(),
+    charId: app.selectedCharId,
+    playerToken: app.playerToken,
+  });
+}
+
+// ==================== 大厅界面事件绑定 ====================
+function initLobbyUI() {
+  const savedName = localStorage.getItem('starve_player_name');
+  const nameInput = document.getElementById('player-name-input');
+  nameInput.value = savedName || `探险家${Math.floor(10 + Math.random() * 89)}`;
+
+  const selectChar = (cid) => {
+    app.selectedCharId = cid;
+    localStorage.setItem('starve_char_id', cid);
+    ui.renderCharacterSelector(cid, selectChar);
+  };
+  selectChar(app.selectedCharId);
+
+  // 标签切换
+  document.querySelectorAll('.tab-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach((c) => c.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById(`tab-${btn.dataset.tab}`).classList.add('active');
+    });
+  });
+
+  document.getElementById('btn-refresh-rooms').addEventListener('click', () => {
+    net.send({ type: 'refresh_lobby' });
+  });
+
+  document.getElementById('btn-create-room').addEventListener('click', () => {
+    net.send({
+      type: 'create_room',
+      roomName: document.getElementById('create-room-name').value.trim() || '饥荒联机营地',
+      startSeason: document.getElementById('create-season').value,
+      difficulty: document.getElementById('create-difficulty').value,
+      pvp: document.getElementById('create-pvp').value === '1',
+      seed: document.getElementById('create-seed').value.trim(),
+      playerName: getPlayerName(),
+      charId: app.selectedCharId,
+      playerToken: app.playerToken,
+    });
+  });
+
+  const copyLanUrl = () => {
+    const url = app.lanUrls[0] || window.location.origin;
+    navigator.clipboard?.writeText(url).then(() => {
+      ui.showToast(`✅ 已复制局域网联机地址：${url}`);
+    }).catch(() => {
+      prompt('复制以下局域网联机地址发送给好友：', url);
+    });
+  };
+  document.getElementById('btn-copy-lan').addEventListener('click', copyLanUrl);
+  document.getElementById('btn-ingame-copy').addEventListener('click', copyLanUrl);
+
+  document.getElementById('btn-mute').addEventListener('click', (ev) => {
+    const muted = sound.toggleMute();
+    ev.currentTarget.textContent = muted ? '🔇 静音' : '🔊 音效';
+  });
+  document.getElementById('btn-save-world').addEventListener('click', () => {
+    net.send({ type: 'save_world' });
+  });
+  document.getElementById('btn-toggle-pvp').addEventListener('click', () => {
+    net.send({ type: 'toggle_pvp' });
+  });
+  document.getElementById('btn-leave-room').addEventListener('click', () => {
+    net.send({ type: 'leave_room' });
+  });
+  document.getElementById('btn-cancel-place').addEventListener('click', () => cancelPlacement());
+}
+
+function cancelPlacement() {
+  app.placementMode = null;
+  document.getElementById('placement-bar').classList.add('hidden');
+}
+
+// ==================== 游戏内鼠标点击与悬停目标检测 ====================
+function findTargetAtWorld(wx, wy) {
+  const st = app.latestState;
+  if (!st) return null;
+
+  // 1. 优先检测生物
+  for (const mob of renderer.interpMobs.values()) {
+    if (mob.t === 'abigail') continue;
+    if (Math.hypot(mob.x - wx, (mob.y - 16) - wy) < 34) {
+      return { kind: 'mob', id: mob.id, type: mob.t };
+    }
+  }
+
+  // 2. PvP 模式下其他玩家
+  if (app.pvp) {
+    for (const pl of renderer.interpPlayers.values()) {
+      if (pl.id !== app.selfId && !pl.isGhost && Math.hypot(pl.x - wx, (pl.y - 18) - wy) < 28) {
+        return { kind: 'player', id: pl.id };
+      }
+    }
+  }
+
+  // 3. 地面掉落物
+  for (const gi of st.items) {
+    if (Math.hypot(gi.x - wx, (gi.y - 6) - wy) < 24) {
+      return { kind: 'item', id: gi.id };
+    }
+  }
+
+  // 4. 可交互/可采集/可攻击的世界实体
+  for (const ent of st.entities) {
+    const def = ENTITY_DEFS[ent.t];
+    if (!def || ent.t === 'rabbit_hole') continue;
+    const hitR = Math.max(24, (def.radius || 20) + 10);
+    if (Math.hypot(ent.x - wx, (ent.y - 12) - wy) < hitR) {
+      return { kind: 'ent', id: ent.id, type: ent.t };
+    }
+  }
+  return null;
+}
+
+function initInputHandlers() {
+  canvas.addEventListener('mousemove', (ev) => {
+    app.mouseScreen.x = ev.clientX;
+    app.mouseScreen.y = ev.clientY;
+    app.mouseWorld = renderer.screenToWorld(ev.clientX, ev.clientY);
+    app.hoverTarget = findTargetAtWorld(app.mouseWorld.x, app.mouseWorld.y);
+  });
+
+  canvas.addEventListener('contextmenu', (ev) => {
+    ev.preventDefault();
+    if (app.placementMode) {
+      cancelPlacement();
+    }
+  });
+
+  canvas.addEventListener('mousedown', (ev) => {
+    if (!app.inGame || ev.button !== 0) return;
+    const mw = renderer.screenToWorld(ev.clientX, ev.clientY);
+
+    if (app.placementMode) {
+      net.send({
+        type: 'place_structure',
+        recipeId: app.placementMode.recipeId,
+        x: mw.x,
+        y: mw.y,
+      });
+      if (!ev.shiftKey) cancelPlacement();
+      return;
+    }
+
+    const hit = findTargetAtWorld(mw.x, mw.y);
+    if (!hit) {
+      net.send({ type: 'click_ground', x: mw.x, y: mw.y });
+      return;
+    }
+
+    if (hit.kind === 'item') {
+      net.send({ type: 'interact_target', targetId: hit.id });
+    } else if (hit.kind === 'player') {
+      net.send({ type: 'attack_target', targetId: hit.id });
+    } else if (hit.kind === 'mob') {
+      if (hit.type === 'pigman' && !ev.ctrlKey) {
+        // 默认左键猪人为投喂雇佣，按住 Ctrl 左键为强制攻击！
+        net.send({ type: 'interact_target', targetId: hit.id });
+      } else {
+        net.send({ type: 'attack_target', targetId: hit.id });
+      }
+    } else if (hit.kind === 'ent') {
+      if (hit.type === 'spider_den' || (ev.ctrlKey && (hit.type === 'wood_wall' || hit.type === 'stone_wall'))) {
+        net.send({ type: 'attack_target', targetId: hit.id });
+      } else {
+        net.send({ type: 'interact_target', targetId: hit.id });
+      }
+    }
+  });
+
+  // 聊天输入框绑定
+  const chatInput = document.getElementById('chat-input');
+  const sendChat = () => {
+    const text = chatInput.value.trim();
+    if (text) {
+      net.send({ type: 'chat', text });
+      chatInput.value = '';
+    }
+    chatInput.blur();
+  };
+  document.getElementById('btn-send-chat').addEventListener('click', sendChat);
+
+  window.addEventListener('keydown', (ev) => {
+    if (!app.inGame) return;
+    const activeTag = document.activeElement?.tagName;
+    if (activeTag === 'INPUT' || activeTag === 'TEXTAREA') {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        sendChat();
+      } else if (ev.key === 'Escape') {
+        document.activeElement.blur();
+      }
+      return;
+    }
+
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      chatInput.focus();
+      return;
+    }
+
+    if (ev.key === 'Escape') {
+      if (app.placementMode) cancelPlacement();
+      ui.toggleMap(false);
+      document.getElementById('guide-modal').classList.add('hidden');
+      return;
+    }
+
+    const code = ev.code;
+    if (code === 'KeyM' || code === 'Tab') {
+      ev.preventDefault();
+      ui.toggleMap();
+      return;
+    }
+
+    if (code === 'Space') {
+      ev.preventDefault();
+      net.send({ type: 'quick_gather' });
+      return;
+    }
+
+    if (code === 'KeyF') {
+      ev.preventDefault();
+      net.send({ type: 'quick_attack' });
+      return;
+    }
+
+    // 数字键 1~9、0 快捷使用背包前 10 格
+    if (/^Digit[0-9]$/.test(code)) {
+      const digit = Number(code.slice(5));
+      const idx = digit === 0 ? 9 : digit - 1;
+      net.send({ type: 'use_slot', slotIndex: idx, secondary: false });
+      return;
+    }
+
+    app.keys.add(code);
+  });
+
+  window.addEventListener('keyup', (ev) => {
+    app.keys.delete(ev.code);
+  });
+
+  window.addEventListener('blur', () => {
+    app.keys.clear();
+  });
+}
+
+// 持续检测 WASD / 方向键发送移动向量
+function pollMovementInput() {
+  if (!app.inGame) return;
+  let mx = 0;
+  let my = 0;
+  if (app.keys.has('KeyW') || app.keys.has('ArrowUp')) my -= 1;
+  if (app.keys.has('KeyS') || app.keys.has('ArrowDown')) my += 1;
+  if (app.keys.has('KeyA') || app.keys.has('ArrowLeft')) mx -= 1;
+  if (app.keys.has('KeyD') || app.keys.has('ArrowRight')) mx += 1;
+
+  if (mx !== app.lastMoveSent.x || my !== app.lastMoveSent.y) {
+    app.lastMoveSent.x = mx;
+    app.lastMoveSent.y = my;
+    net.send({ type: 'input', moveX: mx, moveY: my });
+  }
+}
+
+// ==================== 60 FPS 主渲染循环 ====================
+let lastFrameTime = performance.now();
+function frameLoop(now) {
+  const dt = Math.min(0.1, (now - lastFrameTime) / 1000);
+  lastFrameTime = now;
+
+  pollMovementInput();
+
+  if (app.inGame) {
+    renderer.render({
+      worldStatic: app.worldStatic,
+      latestState: app.latestState,
+      selfId: app.selfId,
+      hoverTargetId: app.hoverTarget?.id || null,
+      placementMode: app.placementMode,
+      mouseWorld: app.mouseWorld,
+    }, dt, now / 1000);
+  }
+
+  requestAnimationFrame(frameLoop);
+}
+
+initLobbyUI();
+initInputHandlers();
+net.connect();
+requestAnimationFrame(frameLoop);

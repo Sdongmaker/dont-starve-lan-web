@@ -1,0 +1,10 @@
+{
+  "name": "dont-starve-lan-web",
+  "version": "1.0.0",
+  "description": "局域网纯网页多人合作生存游戏（类饥荒联机版）- 零外部依赖",
+  "type": "module",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js"
+  }
+}
