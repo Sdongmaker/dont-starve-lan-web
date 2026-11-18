@@ -4,6 +4,8 @@ class SoundEngine {
   constructor() {
     this.ctx = null;
     this.muted = false;
+    this.crackleTimer = 0;
+    this.rainTimer = 0;
   }
 
   _ensureCtx() {
@@ -131,8 +133,36 @@ class SoundEngine {
         this.playTone(392, 784, 0.35, 'triangle', 0.2);
         setTimeout(() => this.playTone(587, 1046, 0.4, 'sine', 0.18), 120);
         break;
+      case 'trap_snap':
+        this.playTone(620, 140, 0.11, 'sawtooth', 0.22);
+        this.playNoise(0.06, 1600, 0.16);
+        break;
+      case 'ping':
+        this.playTone(740, 988, 0.15, 'sine', 0.16);
+        break;
       default:
         break;
+    }
+  }
+
+  // 环境白噪音微粒：靠近篝火噼啪火星声 & 雨天细雨淅沥声
+  tickAmbience(dt, nearFire, isRaining) {
+    if (this.muted || !this.ctx || this.ctx.state !== 'running') return;
+
+    if (nearFire) {
+      this.crackleTimer -= dt;
+      if (this.crackleTimer <= 0) {
+        this.crackleTimer = 0.22 + Math.random() * 0.55;
+        this.playNoise(0.035, 1900 + Math.random() * 1100, 0.035);
+      }
+    }
+
+    if (isRaining) {
+      this.rainTimer -= dt;
+      if (this.rainTimer <= 0) {
+        this.rainTimer = 0.16 + Math.random() * 0.18;
+        this.playNoise(0.09, 1350, 0.024);
+      }
     }
   }
 }

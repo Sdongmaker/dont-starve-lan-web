@@ -189,10 +189,10 @@ export const ITEMS = {
     color: '#395ca6', icon: 'blue_cap', desc: '烤蓝蘑菇，食用恢复 +10 理智。',
   },
   morsel: {
-    id: 'morsel', name: '小肉块', stack: 40, cookResult: 'cooked_morsel', givePigGold: 1,
+    id: 'morsel', name: '小肉块', stack: 40, cookResult: 'cooked_morsel', dryResult: 'small_jerky', givePigGold: 1,
     food: { hp: 0, hunger: 12.5, sanity: -10, isMeat: true },
     potTags: { meat: 0.5 },
-    color: '#de7878', icon: 'morsel', desc: '生小肉块，建议烤熟或放入烹饪锅炖肉丸。',
+    color: '#de7878', icon: 'morsel', desc: '生小肉块，可烤熟、炖肉丸或挂在晾肉架晒成小肉干！',
   },
   cooked_morsel: {
     id: 'cooked_morsel', name: '熟小肉', stack: 40, givePigGold: 1,
@@ -201,10 +201,10 @@ export const ITEMS = {
     color: '#ab5946', icon: 'cooked_morsel', desc: '喷香的烤小肉，可换取猪王金块或收买猪人。',
   },
   meat: {
-    id: 'meat', name: '大肉', stack: 20, cookResult: 'cooked_meat', givePigGold: 2,
+    id: 'meat', name: '大肉', stack: 20, cookResult: 'cooked_meat', dryResult: 'jerky', givePigGold: 2,
     food: { hp: 1, hunger: 25, sanity: -10, isMeat: true },
     potTags: { meat: 1.0 },
-    color: '#cf4242', icon: 'meat', desc: '厚实的大块生肉，可烤肉排、做火腿棒或赠予猪王换金！',
+    color: '#cf4242', icon: 'meat', desc: '厚实的大块生肉，挂在晾肉架可晒成回血回理智神品【风干肉脯】！',
   },
   cooked_meat: {
     id: 'cooked_meat', name: '烤大肉排', stack: 20, givePigGold: 2,
@@ -213,7 +213,7 @@ export const ITEMS = {
     color: '#8f3b28', icon: 'cooked_meat', desc: '滋滋冒油的烤肉排！',
   },
   monster_meat: {
-    id: 'monster_meat', name: '怪物肉', stack: 20, cookResult: 'cooked_monster_meat',
+    id: 'monster_meat', name: '怪物肉', stack: 20, cookResult: 'cooked_monster_meat', dryResult: 'monster_jerky',
     food: { hp: -20, hunger: 18, sanity: -15, isMeat: true, isMonster: true },
     potTags: { meat: 1.0, monster: 1 },
     color: '#73398a', icon: 'monster_meat', desc: '散发恶臭的紫肉！直接吃剧毒，但【1块怪物肉+3浆果/冰】能做出美味肉丸！',
@@ -465,5 +465,75 @@ export const ITEMS = {
     id: 'hostile_flare', name: '敌意信号弹', stack: 5,
     summonBoss: true,
     color: '#eb3b28', icon: 'flare', desc: '向天空发射猩红信号弹，立即吸引远方的【独眼巨鹿 Boss】前来决战！',
+  },
+
+  // ==================== 进阶打磨新增：锤拆、农庄移植、晾肉架、远程与陷阱 ====================
+  hammer: {
+    id: 'hammer', name: '大铁锤', stack: 1, slot: EQUIP_SLOTS.HAND,
+    maxDurability: 75, hammerPower: 1, damage: 17,
+    color: '#9c968d', icon: 'hammer', desc: '手持时按住【Ctrl+左键】可拆除建筑返还一半材料，也可砸毁猪人房获取木板与猪皮！',
+  },
+  bug_net: {
+    id: 'bug_net', name: '捕虫网', stack: 1, slot: EQUIP_SLOTS.HAND,
+    maxDurability: 20, netPower: 1, damage: 8,
+    color: '#e6ebf0', icon: 'net', desc: '黄昏与夜晚用于捕捉林间闪烁的【萤火虫】！',
+  },
+  fireflies_item: {
+    id: 'fireflies_item', name: '萤火虫罐', stack: 20,
+    lanternFuel: 95, releaseEntity: 'fireflies',
+    color: '#d9ff66', icon: 'fireflies', desc: '左键使用可为矿工头灯或提灯大幅充能（+95），右键点击可放生在营地作夜间微光！',
+  },
+  blow_dart: {
+    id: 'blow_dart', name: '高伤吹箭', stack: 10, slot: EQUIP_SLOTS.HAND,
+    rangedDamage: 100, rangedRange: 290, consumeOnShot: true, damage: 10,
+    color: '#5ec8f2', icon: 'dart', desc: '远程暗器！装备后攻击敌人发射吹箭，瞬间造成 100 点高额穿透伤害！',
+  },
+  boomerang: {
+    id: 'boomerang', name: '木制回旋镖', stack: 1, slot: EQUIP_SLOTS.HAND,
+    maxDurability: 14, rangedDamage: 32, rangedRange: 265, isBoomerang: true, damage: 15,
+    color: '#b87b3e', icon: 'boomerang', desc: '轻巧的远程拉怪武器（32 伤害），无伤清理兔子、高脚鸟与发条主教！',
+  },
+  tooth_trap_item: {
+    id: 'tooth_trap_item', name: '犬牙陷阱', stack: 1, maxDurability: 10,
+    placeEntity: 'tooth_trap',
+    color: '#e8e2cf', icon: 'tooth_trap', desc: '点击部署在基地外围！猎犬或巨鹿踩中立即受到 60 点重创，触发后点击即可重置！',
+  },
+  jerky: {
+    id: 'jerky', name: '大块风干肉脯', stack: 20, givePigGold: 2,
+    food: { hp: 20, hunger: 25, sanity: 15, isMeat: true },
+    potTags: { meat: 1.0 },
+    color: '#7a2f22', icon: 'jerky', desc: '【晾肉架出品】三属性全补神品！恢复 +20 生命、+25 饥饿、+15 理智！',
+  },
+  small_jerky: {
+    id: 'small_jerky', name: '小肉干', stack: 40, givePigGold: 1,
+    food: { hp: 8, hunger: 12.5, sanity: 10, isMeat: true },
+    potTags: { meat: 0.5 },
+    color: '#8f4130', icon: 'jerky', desc: '【晾肉架出品】香韧耐嚼的小肉干，恢复 +8 生命、+12.5 饥饿、+10 理智。',
+  },
+  monster_jerky: {
+    id: 'monster_jerky', name: '怪物肉干', stack: 20,
+    food: { hp: -3, hunger: 18, sanity: -5, isMeat: true, isMonster: true },
+    potTags: { meat: 1.0, monster: 1 },
+    color: '#522961', icon: 'jerky', desc: '晾干后的怪物肉，毒性大幅减轻。',
+  },
+  dug_berry_bush: {
+    id: 'dug_berry_bush', name: '连根浆果丛', stack: 10, fuel: 25,
+    plantAs: 'berry_bush',
+    color: '#4e7838', icon: 'berries', desc: '用铁铲挖出的浆果丛苗，右键点击即可移植到自家营地果园！',
+  },
+  dug_grass: {
+    id: 'dug_grass', name: '连根干草丛', stack: 10, fuel: 20,
+    plantAs: 'grass_tuft',
+    color: '#c9b359', icon: 'grass', desc: '用铁铲挖出的草丛根，右键点击即可移植到基地旁集中收割！',
+  },
+  dug_sapling: {
+    id: 'dug_sapling', name: '连根树枝丛', stack: 10, fuel: 20,
+    plantAs: 'sapling',
+    color: '#8c6239', icon: 'twigs', desc: '用铁铲挖出的树枝苗，右键点击即可移植到基地旁！',
+  },
+  spider_hat: {
+    id: 'spider_hat', name: '蜘蛛女王冠', stack: 1, slot: EQUIP_SLOTS.HEAD,
+    maxDurability: 260, wearRate: 0.35, spiderFriend: true, sanityAura: -3,
+    color: '#dbd6cf', icon: 'spider_hat', desc: '击败蜘蛛女王的战利品！佩戴时野生蜘蛛会臣服并跟随你作战！',
   },
 };

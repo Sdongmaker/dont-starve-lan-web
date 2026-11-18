@@ -1,4 +1,4 @@
-// 饥荒风格 HUD、时钟圆盘、小地图/大地图、合成科技栏与背包容器交互管理
+// 饥荒风格 HUD、时钟圆盘、战争迷雾舆图、队友栏、Boss血条、合成科技栏与拖拽背包管理
 import {
   WORLD_HALF,
   BIOME_INFO,
@@ -11,7 +11,7 @@ import {
 import { CHARACTER_LIST, CHARACTERS } from '../shared/characters.js';
 import { ITEMS } from '../shared/items.js';
 import { CRAFT_CATEGORIES, RECIPES, CROCK_POT_GUIDE } from '../shared/recipes.js';
-import { ENTITY_DEFS } from '../shared/entities.js';
+import { ENTITY_DEFS, MOB_DEFS } from '../shared/entities.js';
 import {
   drawSurvivor,
   getItemIconDataUrl,
@@ -27,6 +27,8 @@ export class GameUI {
     this.lastInvSig = '';
     this.lastCraftSig = '';
     this.lastContSig = '';
+    this.lastTeamSig = '';
+    this.dragSrcIdx = null;
 
     this.clockCanvas = document.getElementById('clock-canvas');
     this.clockCtx = this.clockCanvas.getContext('2d');
@@ -35,10 +37,12 @@ export class GameUI {
     this.worldmapCanvas = document.getElementById('worldmap-canvas');
     this.worldmapCtx = this.worldmapCanvas.getContext('2d');
 
-    // 预渲染的地形底图缓存
     this.staticMapCanvas = null;
+    this.fogCanvas = null;
+    this.fogCtx = null;
 
     this.tooltipEl = document.getElementById('item-tooltip');
+    this.cursorHintEl = document.getElementById('cursor-action-hint');
     this.bannerTimer = null;
 
     this._initCraftCategories();
@@ -71,7 +75,6 @@ export class GameUI {
     const ul = document.getElementById('detail-char-perks');
     ul.innerHTML = detail.perks.map((pk) => `<li>${pk}</li>`).join('');
 
-    // 绘制角色预览立绘
     const pv = document.getElementById('char-preview-canvas');
     const pctx = pv.getContext('2d');
     pctx.clearRect(0, 0, pv.width, pv.height);
@@ -145,13 +148,14 @@ export class GameUI {
     }
   }
 
-  // ==================== 预烘焙静态世界地形底图 ====================
-  bakeStaticMap(worldStatic) {
+  // ==================== 预烘焙静态世界地形与羊皮纸战争迷雾 ====================
+  bakeStaticMap(worldStatic, initialExplored = []) {
+    const size = 440;
     const c = document.createElement('canvas');
-    c.width = 440;
-    c.height = 440;
+    c.width = size;
+    c.height = size;
     const ctx = c.getContext('2d');
-    const scale = c.width / worldStatic.worldSize;
+    const scale = size / worldStatic.worldSize;
     const cols = worldStatic.gridCols;
     const ts = worldStatic.tileSize;
 
@@ -168,7 +172,6 @@ export class GameUI {
       }
     }
 
-    // 绘制道路到地图上
     if (worldStatic.roads) {
       ctx.strokeStyle = '#c4ae86';
       ctx.lineWidth = 2.4;
@@ -186,12 +189,41 @@ export class GameUI {
       }
     }
     this.staticMapCanvas = c;
+
+    // 初始化羊皮纸迷雾遮罩层（探索过的区域擦除变亮）
+    const fc = document.createElement('canvas');
+    fc.width = size;
+    fc.height = size;
+    const fctx = fc.getContext('2d');
+    fctx.fillStyle = 'rgba(26, 20, 14, 0.62)';
+    fctx.fillRect(0, 0, size, size);
+    this.fogCanvas = fc;
+    this.fogCtx = fctx;
+
+    if (initialExplored.length > 0) {
+      this.revealExploredTiles(initialExplored, worldStatic);
+    }
+  }
+
+  revealExploredTiles(indices, worldStatic) {
+    if (!this.fogCtx || !worldStatic || !indices) return;
+    const cols = worldStatic.gridCols;
+    const cell = this.fogCanvas.width / cols;
+    for (const idx of indices) {
+      const r = Math.floor(idx / cols);
+      const c = idx % cols;
+      this.fogCtx.clearRect(c * cell - 1, r * cell - 1, cell + 2, cell + 2);
+    }
   }
 
   // ==================== 游戏内实时 HUD 刷新 ====================
-  updateHUD(state, selfId, worldStatic, landmarks) {
+  updateHUD(state, selfId, worldStatic, landmarks, mapPings = []) {
     if (!state || !state.self) return;
     const { world, self } = state;
+
+    if (state.exploredDelta) {
+      this.revealExploredTiles(state.exploredDelta, worldStatic);
+    }
 
     // 1. 绘制饥荒经典 16 格昼/黄昏/黑夜扇形时钟
     this._drawClockDial(world);
@@ -216,13 +248,16 @@ export class GameUI {
     const tVal = Math.round(self.bodyTemp);
     tempPill.textContent = `🌡️ ${tVal}℃`;
     tempPill.className = `env-pill ${tVal < TEMP_FREEZE_WARN ? 'cold' : (tVal > TEMP_HEAT_WARN ? 'hot' : '')}`;
-
     document.getElementById('pill-wet').textContent = `💧 ${self.moisture}%`;
 
     // 鬼魂提示横条
     document.getElementById('ghost-bar').classList.toggle('hidden', !self.isGhost);
 
-    // 4. 仅在物品或装备变化时重绘底部背包栏（防闪烁！）
+    // 3.5 队友状态栏与 Boss 讨伐大血条
+    this._updateTeamRoster(state.players, selfId);
+    this._updateBossHud(state.mobs);
+
+    // 4. 仅在物品或装备变化时重绘底部背包栏
     const invSig = JSON.stringify({ i: self.inventory, e: self.equip });
     if (invSig !== this.lastInvSig) {
       this.lastInvSig = invSig;
@@ -251,8 +286,61 @@ export class GameUI {
       this._renderContainerPanel(self.openContainer);
     }
 
-    // 7. 绘制右上角小地图（以及展开状态下的大地图）
-    this._drawMaps(state, selfId, worldStatic, landmarks);
+    // 7. 绘制右上角小地图与展开大地图
+    this._drawMaps(state, selfId, worldStatic, landmarks, mapPings);
+  }
+
+  _updateTeamRoster(players, selfId) {
+    const mates = (players || []).filter((p) => p.id !== selfId);
+    const sig = mates.map((m) => `${m.id}:${m.name}:${m.hp}:${m.maxHp}:${m.isGhost}`).join('|');
+    if (sig === this.lastTeamSig) return;
+    this.lastTeamSig = sig;
+
+    const box = document.getElementById('team-roster');
+    box.innerHTML = '';
+    for (const m of mates) {
+      const charName = CHARACTERS[m.charId]?.name || '';
+      const pct = m.isGhost ? 0 : Math.max(0, Math.min(100, (m.hp / m.maxHp) * 100));
+      const div = document.createElement('div');
+      div.className = `mate-pill ${m.isGhost ? 'ghost' : ''}`;
+      div.innerHTML = `
+        <div class="mate-top">
+          <span>${m.isGhost ? '👻' : '🟢'} ${this._esc(m.name)}</span>
+          <span style="color:#b8a88e;font-weight:normal">${m.isGhost ? '灵魂态' : `${m.hp}HP`}</span>
+        </div>
+        <div class="mate-hp-bar"><div class="mate-hp-fill" style="width:${pct}%"></div></div>
+      `;
+      div.title = `${m.name} (${charName})`;
+      box.appendChild(div);
+    }
+  }
+
+  _updateBossHud(mobs) {
+    const boss = (mobs || []).find((m) => MOB_DEFS[m.t]?.isBoss);
+    const box = document.getElementById('boss-hud');
+    if (!boss) {
+      box.classList.add('hidden');
+      return;
+    }
+    const def = MOB_DEFS[boss.t];
+    box.classList.remove('hidden');
+    document.getElementById('boss-hud-name').textContent = `💀 ${def.name}`;
+    const pct = Math.max(0, Math.min(100, (boss.hp / boss.mhp) * 100));
+    document.getElementById('boss-hp-fill').style.width = `${pct}%`;
+    document.getElementById('boss-hp-text').textContent = `${boss.hp} / ${boss.mhp}`;
+  }
+
+  updateCursorHint(text, sx, sy) {
+    if (!text) {
+      this.cursorHintEl.classList.add('hidden');
+      return;
+    }
+    this.cursorHintEl.textContent = text;
+    this.cursorHintEl.classList.remove('hidden');
+    const x = Math.min(window.innerWidth - 260, sx + 16);
+    const y = Math.min(window.innerHeight - 40, sy + 18);
+    this.cursorHintEl.style.left = `${x}px`;
+    this.cursorHintEl.style.top = `${y}px`;
   }
 
   _drawClockDial(world) {
@@ -269,9 +357,9 @@ export class GameUI {
     for (let i = 0; i < 16; i++) {
       const a0 = -Math.PI / 2 + (i / 16) * Math.PI * 2;
       const a1 = -Math.PI / 2 + ((i + 1) / 16) * Math.PI * 2;
-      let color = '#211d30'; // Night
-      if (i < segs.day) color = '#e8b643'; // Day
-      else if (i < segs.day + segs.dusk) color = '#bd5b38'; // Dusk
+      let color = '#211d30';
+      if (i < segs.day) color = '#e8b643';
+      else if (i < segs.day + segs.dusk) color = '#bd5b38';
       else if (world.isFullMoon) color = '#587da8';
 
       ctx.beginPath();
@@ -285,14 +373,12 @@ export class GameUI {
       ctx.stroke();
     }
 
-    // 外表圈铜框
     ctx.strokeStyle = '#9c7b49';
     ctx.lineWidth = 3.5;
     ctx.beginPath();
     ctx.arc(cx, cy, r, 0, Math.PI * 2);
     ctx.stroke();
 
-    // 旋转指针
     const handAngle = -Math.PI / 2 + world.dayProgress * Math.PI * 2;
     ctx.save();
     ctx.translate(cx, cy);
@@ -305,7 +391,6 @@ export class GameUI {
     ctx.stroke();
     ctx.restore();
 
-    // 中心天数圆章
     ctx.fillStyle = '#241c16';
     ctx.strokeStyle = '#b89458';
     ctx.lineWidth = 2;
@@ -428,6 +513,32 @@ export class GameUI {
     for (let i = 0; i < INVENTORY_SIZE; i++) {
       const it = self.inventory[i];
       const slotEl = this._createSlotElement(it, i < 9 ? String(i + 1) : (i === 9 ? '0' : ''));
+
+      // 支持拖拽换位与同类合并堆叠！
+      if (it) {
+        slotEl.draggable = true;
+        slotEl.addEventListener('dragstart', (ev) => {
+          this.dragSrcIdx = i;
+          ev.dataTransfer?.setData('text/plain', String(i));
+          this.hideTooltip();
+        });
+      }
+      slotEl.addEventListener('dragover', (ev) => {
+        if (this.dragSrcIdx !== null && this.dragSrcIdx !== i) {
+          ev.preventDefault();
+          slotEl.classList.add('drag-over');
+        }
+      });
+      slotEl.addEventListener('dragleave', () => slotEl.classList.remove('drag-over'));
+      slotEl.addEventListener('drop', (ev) => {
+        ev.preventDefault();
+        slotEl.classList.remove('drag-over');
+        if (this.dragSrcIdx !== null && this.dragSrcIdx !== i) {
+          this.cb.onSwapSlot?.(this.dragSrcIdx, i);
+        }
+        this.dragSrcIdx = null;
+      });
+
       slotEl.addEventListener('click', (ev) => {
         if (ev.shiftKey) {
           this.cb.onDropSlot?.(i, false);
@@ -484,6 +595,7 @@ export class GameUI {
     img.src = getItemIconDataUrl(item.id, 36);
     img.width = 34;
     img.height = 34;
+    img.draggable = false;
     div.appendChild(img);
 
     if (item.count > 1) {
@@ -493,7 +605,6 @@ export class GameUI {
       div.appendChild(cnt);
     }
 
-    // 保暖石温度角标提示
     if (item.id === 'thermal_stone' && item.extra?.temp !== undefined) {
       const st = Math.round(item.extra.temp);
       const cnt = document.createElement('span');
@@ -563,7 +674,6 @@ export class GameUI {
       }
       body.appendChild(btn);
 
-      // 内置食谱速查表！
       const guide = document.createElement('div');
       guide.className = 'pot-guide-box';
       guide.innerHTML = `<div style="color:#ebba49;font-weight:bold;">📖 经典食谱速查：</div>` +
@@ -589,10 +699,10 @@ export class GameUI {
     }
   }
 
-  _drawMaps(state, selfId, worldStatic, landmarks) {
+  _drawMaps(state, selfId, worldStatic, landmarks, mapPings) {
     if (!this.staticMapCanvas || !worldStatic) return;
 
-    // 1. 右上角局部雷达小地图
+    // 1. 右上角局部雷达小地图（叠加战争迷雾）
     const mctx = this.minimapCtx;
     const mw = this.minimapCanvas.width;
     const mh = this.minimapCanvas.height;
@@ -608,6 +718,9 @@ export class GameUI {
       mctx.fillStyle = '#18242e';
       mctx.fillRect(0, 0, mw, mh);
       mctx.drawImage(this.staticMapCanvas, sx, sy, sw, sw, 0, 0, mw, mh);
+      if (this.fogCanvas) {
+        mctx.drawImage(this.fogCanvas, sx, sy, sw, sw, 0, 0, mw, mh);
+      }
 
       const toMini = (wx, wy) => ({
         x: ((wx - (me.x - viewSpan / 2)) / viewSpan) * mw,
@@ -635,13 +748,16 @@ export class GameUI {
       }
     }
 
-    // 2. 全屏世界舆图（打开时绘制全部地标与所有局域网队友姓名！）
+    // 2. 全屏世界舆图（含羊皮纸战争迷雾 + 点击发送全队 Ping！）
     if (this.mapOpen) {
       const wctx = this.worldmapCtx;
       const ww = this.worldmapCanvas.width;
       const wh = this.worldmapCanvas.height;
       wctx.clearRect(0, 0, ww, wh);
       wctx.drawImage(this.staticMapCanvas, 0, 0, ww, wh);
+      if (this.fogCanvas) {
+        wctx.drawImage(this.fogCanvas, 0, 0, ww, wh);
+      }
 
       const toMap = (wx, wy) => ({
         x: ((wx + WORLD_HALF) / worldStatic.worldSize) * ww,
@@ -671,6 +787,19 @@ export class GameUI {
         }
       }
 
+      for (const mp of mapPings) {
+        const pt = toMap(mp.x, mp.y);
+        wctx.strokeStyle = '#7ee3a2';
+        wctx.lineWidth = 2.5;
+        wctx.beginPath();
+        wctx.arc(pt.x, pt.y, 12, 0, Math.PI * 2);
+        wctx.stroke();
+        wctx.fillStyle = '#a8ffc4';
+        wctx.font = 'bold 12px "Microsoft YaHei", sans-serif';
+        wctx.textAlign = 'center';
+        wctx.fillText(`📍 ${mp.sender}`, pt.x, pt.y - 15);
+      }
+
       for (const pl of state.players) {
         const pt = toMap(pl.x, pl.y);
         wctx.fillStyle = pl.isGhost ? '#9be0ff' : (pl.id === selfId ? '#6eff78' : '#ffcf4d');
@@ -693,14 +822,19 @@ export class GameUI {
   _showTooltip(item, cx, cy) {
     const def = ITEMS[item.id];
     if (!def) return;
-    let actionHint = '左键点击使用';
+    let actionHint = '左键点击使用 | 拖拽可换格';
     if (def.slot) actionHint = '左键穿戴装备 | Shift+点击丢弃';
     else if (def.food) {
       const f = def.food;
       actionHint = `食用效果: ❤️${f.hp >= 0 ? '+' : ''}${f.hp}  🍖+${f.hunger}  🧠${f.sanity >= 0 ? '+' : ''}${f.sanity}`;
       if (def.cookResult) actionHint += '<br/>🔥 靠近火堆【右键点击】可烤熟！';
+      if (item.id === 'ice') actionHint += '<br/>❄️ 靠近着火树木【右键点击】可灭火！';
     } else if (def.plantAs) {
-      actionHint = '🌱 右键点击可在地面种树！';
+      actionHint = item.id.startsWith('dug_')
+        ? '🌱 左键或右键点击立即移植到脚下！'
+        : '🌱 右键点击可在地面种树！';
+    } else if (def.releaseEntity) {
+      actionHint = '✨ 左键为头灯/提灯充能 | 右键放生营地发光';
     }
 
     this.tooltipEl.innerHTML = `
@@ -763,6 +897,18 @@ export class GameUI {
     document.getElementById('minimap-box').addEventListener('click', () => this.toggleMap());
     document.getElementById('btn-map').addEventListener('click', () => this.toggleMap());
     document.getElementById('btn-close-map').addEventListener('click', () => this.toggleMap(false));
+
+    // 点击全屏世界地图任意坐标向全队发送 Ping 标记！
+    this.worldmapCanvas.addEventListener('click', (ev) => {
+      const ws = this.cb.getWorldStatic?.();
+      if (!ws) return;
+      const rect = this.worldmapCanvas.getBoundingClientRect();
+      const rx = (ev.clientX - rect.left) / rect.width;
+      const ry = (ev.clientY - rect.top) / rect.height;
+      const wx = rx * ws.worldSize - WORLD_HALF;
+      const wy = ry * ws.worldSize - WORLD_HALF;
+      this.cb.onMapPing?.(wx, wy);
+    });
 
     const guideModal = document.getElementById('guide-modal');
     document.getElementById('btn-guide').addEventListener('click', () => guideModal.classList.remove('hidden'));

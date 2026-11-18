@@ -28,10 +28,22 @@ export const RECIPES = [
     desc: '敲碎岩石、金矿与冰川。',
   },
   {
+    id: 'hammer', name: '大铁锤', category: 'tools', tech: TECH_LEVELS.NONE,
+    cost: [{ id: 'twigs', count: 3 }, { id: 'rocks', count: 3 }, { id: 'grass', count: 6 }],
+    result: { id: 'hammer', count: 1 },
+    desc: '按住【Ctrl+左键】锤拆自家建筑返还材料，也可砸猪人房拿木板与猪皮！',
+  },
+  {
     id: 'shovel', name: '铁铲', category: 'tools', tech: TECH_LEVELS.SCIENCE_1,
     cost: [{ id: 'twigs', count: 2 }, { id: 'flint', count: 2 }],
     result: { id: 'shovel', count: 1 },
-    desc: '挖出树桩获得额外木头。',
+    desc: '挖树桩回收木头；按住【Ctrl+左键】可将野生浆果/干草/树枝连根挖回基地种植！',
+  },
+  {
+    id: 'bug_net', name: '捕虫网', category: 'tools', tech: TECH_LEVELS.SCIENCE_1,
+    cost: [{ id: 'twigs', count: 4 }, { id: 'silk', count: 2 }, { id: 'rope', count: 1 }],
+    result: { id: 'bug_net', count: 1 },
+    desc: '夜晚捕捉林间闪烁的萤火虫，制作矿工头灯与提灯续命！',
   },
   {
     id: 'razor', name: '剃刀', category: 'tools', tech: TECH_LEVELS.SCIENCE_1,
@@ -187,6 +199,12 @@ export const RECIPES = [
     desc: '基地灵魂建筑！放入4份食材烹调肉丸、波兰水饺、培根煎蛋等神级料理！',
   },
   {
+    id: 'drying_rack', name: '风干晾肉架', category: 'structures', tech: TECH_LEVELS.SCIENCE_1,
+    cost: [{ id: 'twigs', count: 3 }, { id: 'charcoal', count: 2 }, { id: 'rope', count: 3 }],
+    structure: 'drying_rack',
+    desc: '挂上生肉块，风干成同时恢复生命、饥饿与高额理智的【风干肉脯】！',
+  },
+  {
     id: 'ice_box', name: '保鲜冰箱', category: 'structures', tech: TECH_LEVELS.SCIENCE_2,
     cost: [{ id: 'gold', count: 2 }, { id: 'gears', count: 1 }, { id: 'boards', count: 1 }],
     structure: 'ice_box',
@@ -211,6 +229,24 @@ export const RECIPES = [
     cost: [{ id: 'twigs', count: 2 }, { id: 'rope', count: 1 }, { id: 'flint', count: 1 }],
     result: { id: 'spear', count: 1 },
     desc: '标准生存战矛（伤害 34）。',
+  },
+  {
+    id: 'boomerang', name: '木制回旋镖', category: 'fight', tech: TECH_LEVELS.SCIENCE_1,
+    cost: [{ id: 'boards', count: 1 }, { id: 'silk', count: 1 }, { id: 'charcoal', count: 1 }],
+    result: { id: 'boomerang', count: 1 },
+    desc: '远程拉怪利器（32 伤害），无伤猎兔与风筝 Boss！',
+  },
+  {
+    id: 'blow_dart', name: '高伤吹箭 (x2)', category: 'fight', tech: TECH_LEVELS.SCIENCE_1,
+    cost: [{ id: 'reeds', count: 2 }, { id: 'hound_tooth', count: 1 }],
+    result: { id: 'blow_dart', count: 2 },
+    desc: '一击 100 点恐怖远程伤害的沼泽吹箭！',
+  },
+  {
+    id: 'tooth_trap_item', name: '犬牙陷阱', category: 'fight', tech: TECH_LEVELS.SCIENCE_2,
+    cost: [{ id: 'log', count: 1 }, { id: 'rope', count: 1 }, { id: 'hound_tooth', count: 1 }],
+    result: { id: 'tooth_trap_item', count: 1 },
+    desc: '猎犬克星！铺设狗牙大阵，敌人踩中立扣 60 血且可反复重置！',
   },
   {
     id: 'ham_bat', name: '鲜肉火腿棒', category: 'fight', tech: TECH_LEVELS.SCIENCE_2,

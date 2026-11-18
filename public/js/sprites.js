@@ -126,6 +126,61 @@ export function drawItemVector(ctx, itemId, cx, cy, r) {
     ctx.bezierCurveTo(-r * 0.9, r * 0.05, -r * 0.7, -r * 0.75, 0, -r * 0.25);
     ctx.bezierCurveTo(r * 0.7, -r * 0.75, r * 0.9, r * 0.05, 0, r * 0.65);
     ctx.fill(); ctx.stroke();
+  } else if (ic === 'hammer') {
+    ctx.strokeStyle = '#6e4726';
+    ctx.lineWidth = r * 0.22;
+    ctx.beginPath(); ctx.moveTo(-r * 0.62, r * 0.62); ctx.lineTo(r * 0.35, -r * 0.35); ctx.stroke();
+    ctx.fillStyle = '#9c968d';
+    ctx.strokeStyle = '#1a1410';
+    ctx.lineWidth = 1.6;
+    ctx.save();
+    ctx.translate(r * 0.25, -r * 0.25);
+    ctx.rotate(Math.PI / 4);
+    ctx.fillRect(-r * 0.45, -r * 0.26, r * 0.9, r * 0.52);
+    ctx.strokeRect(-r * 0.45, -r * 0.26, r * 0.9, r * 0.52);
+    ctx.restore();
+  } else if (ic === 'net') {
+    ctx.strokeStyle = '#6e4726';
+    ctx.lineWidth = r * 0.2;
+    ctx.beginPath(); ctx.moveTo(-r * 0.65, r * 0.65); ctx.lineTo(r * 0.15, -r * 0.15); ctx.stroke();
+    ctx.fillStyle = 'rgba(235,245,255,0.75)';
+    ctx.strokeStyle = '#1a1410';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.ellipse(r * 0.3, -r * 0.3, r * 0.45, r * 0.32, -0.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  } else if (ic === 'boomerang') {
+    ctx.strokeStyle = '#b87b3e';
+    ctx.lineWidth = r * 0.28;
+    ctx.beginPath();
+    ctx.moveTo(-r * 0.62, r * 0.25);
+    ctx.quadraticCurveTo(0, -r * 0.68, r * 0.62, r * 0.25);
+    ctx.stroke();
+  } else if (ic === 'dart') {
+    ctx.strokeStyle = '#5ec8f2';
+    ctx.lineWidth = r * 0.22;
+    ctx.beginPath(); ctx.moveTo(-r * 0.6, r * 0.6); ctx.lineTo(r * 0.6, -r * 0.6); ctx.stroke();
+    ctx.fillStyle = '#eb4b4b';
+    ctx.beginPath(); ctx.arc(-r * 0.52, r * 0.52, r * 0.22, 0, Math.PI * 2); ctx.fill();
+  } else if (ic === 'fireflies') {
+    for (const [fx, fy] of [[-0.3, -0.2], [0.32, -0.3], [0.05, 0.28]]) {
+      ctx.fillStyle = '#e2ff66';
+      ctx.beginPath(); ctx.arc(fx * r, fy * r, r * 0.22, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    }
+  } else if (ic === 'tooth_trap') {
+    ctx.fillStyle = '#7d6b52';
+    ctx.beginPath(); ctx.ellipse(0, r * 0.18, r * 0.72, r * 0.32, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#f2ede0';
+    for (const tx of [-0.42, 0, 0.42]) {
+      ctx.beginPath();
+      ctx.moveTo((tx - 0.16) * r, r * 0.15);
+      ctx.lineTo(tx * r, -r * 0.48);
+      ctx.lineTo((tx + 0.16) * r, r * 0.15);
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+    }
+  } else if (ic === 'jerky') {
+    ctx.fillStyle = def.color;
+    ctx.beginPath();
+    ctx.roundRect(-r * 0.46, -r * 0.62, r * 0.92, r * 1.24, 6);
+    ctx.fill(); ctx.stroke();
   } else if (ic.includes('hat') || ic.includes('helm') || ic === 'garland' || ic === 'eyebrella') {
     ctx.fillStyle = def.color;
     ctx.beginPath();
@@ -817,6 +872,60 @@ export function drawWorldEntity(ctx, ent, time, season) {
       break;
     }
 
+    case 'drying_rack': {
+      ctx.strokeStyle = '#6e4726';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(-20, 4); ctx.lineTo(-12, -46);
+      ctx.moveTo(20, 4); ctx.lineTo(12, -46);
+      ctx.moveTo(-18, -42); ctx.lineTo(18, -42);
+      ctx.stroke();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = '#17120e';
+      if (ent.di || ent.dr) {
+        const showId = ent.dr || ent.di;
+        const ic = getItemIconCanvas(showId, 28);
+        ctx.drawImage(ic, -14, -38 + Math.sin(time * 2.5) * 1.5);
+        if (ent.dr) {
+          ctx.fillStyle = '#8de892';
+          ctx.font = 'bold 11px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText('✨可收取', 0, -50);
+        }
+      }
+      break;
+    }
+
+    case 'tooth_trap': {
+      ctx.fillStyle = '#6e5b43';
+      ctx.beginPath(); ctx.ellipse(0, 0, 15, 7, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      if (!ent.sp) {
+        ctx.fillStyle = '#f2ede0';
+        for (const tx of [-8, 0, 8]) {
+          ctx.beginPath();
+          ctx.moveTo(tx - 3, 1); ctx.lineTo(tx, -11); ctx.lineTo(tx + 3, 1);
+          ctx.closePath(); ctx.fill(); ctx.stroke();
+        }
+      } else {
+        ctx.fillStyle = '#ff9e66';
+        ctx.font = 'bold 10px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('⚙️点击重置', 0, -14);
+      }
+      break;
+    }
+
+    case 'fireflies': {
+      for (let i = 0; i < 4; i++) {
+        const fx = Math.cos(time * 2.6 + i * 1.7) * 11;
+        const fy = -14 + Math.sin(time * 3.4 + i * 2.1) * 7;
+        const alpha = 0.45 + Math.abs(Math.sin(time * 5 + i)) * 0.55;
+        ctx.fillStyle = `rgba(225, 255, 95, ${alpha})`;
+        ctx.beginPath(); ctx.arc(fx, fy, 2.8, 0, Math.PI * 2); ctx.fill();
+      }
+      break;
+    }
+
     case 'skeleton': {
       ctx.fillStyle = '#dedad2';
       ctx.beginPath(); ctx.arc(0, -8, 8, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
@@ -825,6 +934,19 @@ export function drawWorldEntity(ctx, ent, time, season) {
 
     default:
       break;
+  }
+
+  // 树木或灌木正在熊熊燃烧时的火焰包裹层！
+  if (ent.b) {
+    const fh = 32 + Math.sin(time * 24 + ent.x) * 6;
+    ctx.fillStyle = 'rgba(255, 105, 24, 0.88)';
+    ctx.beginPath();
+    ctx.moveTo(0, -fh - 14);
+    ctx.quadraticCurveTo(22, -fh * 0.4, 0, 4);
+    ctx.quadraticCurveTo(-22, -fh * 0.4, 0, -fh - 14);
+    ctx.fill();
+    ctx.fillStyle = '#ffe96b';
+    ctx.beginPath(); ctx.arc(0, -16, 8, 0, Math.PI * 2); ctx.fill();
   }
 
   ctx.restore();
@@ -836,7 +958,7 @@ export function drawMob(ctx, mob, time) {
   ctx.translate(mob.x, mob.y);
 
   const isShadow = mob.t === 'shadow_crawler' || mob.t === 'shadow_beak';
-  const isBoss = mob.t === 'deerclops' || mob.t === 'treeguard';
+  const isBoss = mob.t === 'deerclops' || mob.t === 'treeguard' || mob.t === 'spider_queen';
   const hop = Math.abs(Math.sin(time * 10 + mob.x * 0.05)) * 3;
 
   // 蓄力攻击前摇红圈预警（方便玩家走A躲避！）
@@ -929,6 +1051,17 @@ export function drawMob(ctx, mob, time) {
       break;
     }
 
+    case 'clockwork_bishop': {
+      ctx.fillStyle = '#8c78a6';
+      ctx.beginPath();
+      ctx.moveTo(-14, 2); ctx.lineTo(-10, -42); ctx.lineTo(0, -58);
+      ctx.lineTo(10, -42); ctx.lineTo(14, 2);
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#e066ff';
+      ctx.beginPath(); ctx.arc(4, -36, 5.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      break;
+    }
+
     case 'hound':
     case 'fire_hound':
     case 'ice_hound': {
@@ -1006,6 +1139,27 @@ export function drawMob(ctx, mob, time) {
       break;
     }
 
+    case 'spider_queen': {
+      ctx.strokeStyle = '#1f1a1c';
+      ctx.lineWidth = 3.2;
+      for (const ly of [-16, -8, 0, 8]) {
+        ctx.beginPath(); ctx.moveTo(-36, ly); ctx.lineTo(36, -ly * 0.6); ctx.stroke();
+      }
+      ctx.fillStyle = '#292226';
+      ctx.beginPath(); ctx.ellipse(0, -24, 28, 22, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      // 白色蛛丝女王高冠
+      ctx.fillStyle = '#ebeef2';
+      ctx.beginPath();
+      ctx.moveTo(-18, -38); ctx.lineTo(-14, -74); ctx.lineTo(0, -64);
+      ctx.lineTo(14, -74); ctx.lineTo(18, -38);
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#eb2f2f';
+      for (const ex of [4, 11, 17]) {
+        ctx.beginPath(); ctx.arc(ex, -24, 3, 0, Math.PI * 2); ctx.fill();
+      }
+      break;
+    }
+
     default:
       break;
   }
@@ -1035,5 +1189,35 @@ export function drawMob(ctx, mob, time) {
     }
   }
 
+  ctx.restore();
+}
+
+// 绘制飞行远程弹道（吹箭、回旋镖、发条主教闪电球）
+export function drawProjectile(ctx, prj, time) {
+  ctx.save();
+  ctx.translate(prj.x, prj.y);
+  if (prj.k === 'bishop_orb') {
+    ctx.fillStyle = 'rgba(215, 95, 255, 0.35)';
+    ctx.beginPath(); ctx.arc(0, 0, 13, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#f3b8ff';
+    ctx.strokeStyle = '#6c1f9c';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(0, 0, 6.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  } else if (prj.k === 'boomerang') {
+    ctx.rotate(time * 18);
+    ctx.strokeStyle = '#c48341';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(-10, 5); ctx.quadraticCurveTo(0, -10, 10, 5);
+    ctx.stroke();
+  } else {
+    const ang = Math.atan2(prj.vy || 0, prj.vx || 1);
+    ctx.rotate(ang);
+    ctx.strokeStyle = '#6ad4ff';
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(-12, 0); ctx.lineTo(10, 0); ctx.stroke();
+    ctx.fillStyle = '#ff4b4b';
+    ctx.beginPath(); ctx.arc(-10, 0, 3, 0, Math.PI * 2); ctx.fill();
+  }
   ctx.restore();
 }

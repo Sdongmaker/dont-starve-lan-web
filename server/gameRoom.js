@@ -44,6 +44,9 @@ export class GameRoom {
     this.clients = new Map(); // clientId -> WSClient
     this.players = new Map(); // clientId -> PlayerState
     this.savedPlayers = {};   // playerKey -> serialized PlayerState
+    this.projectiles = new Map(); // projId -> Projectile
+    this.exploredTiles = new Set(); // 团队共享已探索地块索引
+    this.newlyExplored = [];
     this.fxEvents = [];       // 本帧待广播瞬时特效与音效事件
 
     if (options.loadedSnapshot) {
@@ -252,6 +255,7 @@ export class GameRoom {
         roads: this.roads,
       },
       mapLandmarks: this._buildMapLandmarks(),
+      explored: [...this.exploredTiles],
     });
 
     this.broadcastChat('系统', `🌟 ${player.name}（${CHARACTERS[player.charId]?.name || ''}）进入了荒野！`, '#f2c138');
@@ -321,6 +325,14 @@ export class GameRoom {
 
       case 'interact_target': {
         player.interactTargetId = String(msg.targetId || '');
+        player.altInteract = false;
+        player.attackTargetId = null;
+        break;
+      }
+
+      case 'alt_interact_target': {
+        player.interactTargetId = String(msg.targetId || '');
+        player.altInteract = true;
         player.attackTargetId = null;
         break;
       }
@@ -328,6 +340,48 @@ export class GameRoom {
       case 'attack_target': {
         player.attackTargetId = String(msg.targetId || '');
         player.interactTargetId = null;
+        player.altInteract = false;
+        break;
+      }
+
+      case 'swap_slot': {
+        const fromIdx = Number(msg.fromIdx);
+        const toIdx = Number(msg.toIdx);
+        if (
+          fromIdx >= 0 && fromIdx < INVENTORY_SIZE &&
+          toIdx >= 0 && toIdx < INVENTORY_SIZE &&
+          fromIdx !== toIdx
+        ) {
+          const a = player.inventory[fromIdx];
+          const b = player.inventory[toIdx];
+          if (a && b && a.id === b.id && (ITEMS[a.id]?.stack || 1) > 1) {
+            const maxStack = ITEMS[a.id].stack;
+            const add = Math.min(a.count, maxStack - b.count);
+            b.count += add;
+            a.count -= add;
+            if (a.count <= 0) player.inventory[fromIdx] = null;
+          } else {
+            player.inventory[fromIdx] = b;
+            player.inventory[toIdx] = a;
+          }
+        }
+        break;
+      }
+
+      case 'map_ping': {
+        const now = Date.now();
+        if (!player.lastPingAt || now - player.lastPingAt > 1200) {
+          player.lastPingAt = now;
+          const px = clamp(Math.round(Number(msg.x) || 0), -WORLD_HALF, WORLD_HALF);
+          const py = clamp(Math.round(Number(msg.y) || 0), -WORLD_HALF, WORLD_HALF);
+          this.broadcast({
+            type: 'map_ping',
+            sender: player.name,
+            x: px,
+            y: py,
+          });
+          this.broadcastChat('地图标记', `📍 ${player.name} 标记了坐标 (${px}, ${py})！`, '#7ee3a2');
+        }
         break;
       }
 
@@ -507,6 +561,12 @@ export class GameRoom {
     // 更新所有生物 AI 与战斗结算
     this._updateMobs(dt, dayInfo);
 
+    // 更新远程飞行弹体（吹箭、回旋镖、发条主教闪电球）
+    this._updateProjectiles(dt);
+
+    // 更新团队战争迷雾探索区块
+    this._updateTeamExploration();
+
     // 定时自动存档（每 180 秒一次）
     this.autoSaveTimer += dt;
     if (this.autoSaveTimer >= 180) {
@@ -517,6 +577,7 @@ export class GameRoom {
     // 推送 20Hz AOI 视野状态包给每个客户端
     this._sendSnapshots(dayInfo);
     this.fxEvents.length = 0;
+    this.newlyExplored.length = 0;
   }
 
   _updateWeather(dt, dayInfo) {
@@ -677,6 +738,55 @@ export class GameRoom {
         }
       }
 
+      // 燃烧中的树木或灌木结算（烧完转化为焦黑木炭树或灰烬！）
+      if (ent.burning && ent.burning > 0) {
+        const burnDecay = this.isRaining && dayInfo.season !== 'winter' ? 2.2 : 1.0;
+        ent.burning -= dt * burnDecay;
+        if (ent.burning <= 0) {
+          delete ent.burning;
+          if (ent.type === 'pine_tree' || ent.type === 'birch_tree' || ent.type === 'spiky_tree') {
+            ent.type = 'burnt_tree';
+            ent.radius = 16;
+            ent.hitsLeft = 1;
+          } else {
+            this._spawnGroundItem('ash', 1, ent.x, ent.y);
+            this.entities.delete(id);
+          }
+          continue;
+        }
+      }
+
+      // 晾肉架风干倒计时（雨天暂停风干）
+      if (def.isDryingRack && ent.dryingItem && !ent.driedItem) {
+        if (!this.isRaining || dayInfo.season === 'winter') {
+          ent.dryTimer = (ent.dryTimer || 0) - dt;
+          if (ent.dryTimer <= 0) {
+            ent.driedItem = ent.dryResult || 'jerky';
+            ent.dryingItem = null;
+            ent.dryTimer = 0;
+            this._pushFx({ kind: 'cook_done', x: ent.x, y: ent.y });
+          }
+        }
+      }
+
+      // 犬牙陷阱检测敌对生物踩踏
+      if (def.isToothTrap && !ent.sprung) {
+        for (const mob of this.mobs.values()) {
+          if (mob.type === 'rabbit' || mob.type === 'abigail') continue;
+          if (mob.type === 'pigman' && mob.leaderId) continue;
+          if (Math.hypot(mob.x - ent.x, mob.y - ent.y) < 28) {
+            ent.sprung = true;
+            ent.durability = Math.max(0, (ent.durability ?? 10) - 1);
+            this._pushFx({ kind: 'trap_snap', x: ent.x, y: ent.y });
+            this._damageMob(mob, 60, null);
+            if (ent.durability <= 0) {
+              this.entities.delete(id);
+            }
+            break;
+          }
+        }
+      }
+
       // 捕兽草笼检测周围小型生物
       if (def.isTrap && !ent.caughtItem) {
         for (const [mId, mob] of this.mobs.entries()) {
@@ -700,12 +810,14 @@ export class GameRoom {
     if (dayInfo.isFullMoon) return 0.65;
 
     let maxLight = 0;
-    // 1. 建筑与地标光源
+    // 1. 建筑、燃烧物、流萤与地标光源
     for (const ent of this.entities.values()) {
       const def = ENTITY_DEFS[ent.type];
       if (!def) continue;
-      let r = def.lightRadius || 0;
-      if (def.isFire && ent.fuel > 0) {
+      let r = def.lightRadius || def.nightLightRadius || 0;
+      if (ent.burning && ent.burning > 0) {
+        r = Math.max(r, 200);
+      } else if (def.isFire && ent.fuel > 0) {
         const ratio = clamp(ent.fuel / def.maxFuel, 0.15, 1);
         r = 125 + ratio * 185;
       }
@@ -973,7 +1085,10 @@ export class GameRoom {
     let fireInfluence = 0; // 正为升温火，负为吸热冷火
     for (const ent of this.entities.values()) {
       const def = ENTITY_DEFS[ent.type];
-      if (def?.isFire && ent.fuel > 0) {
+      if (ent.burning && ent.burning > 0) {
+        const d = Math.hypot(ent.x - p.x, ent.y - p.y);
+        if (d < 210) fireInfluence += 34 * (1 - d / 210) * 1.3;
+      } else if (def?.isFire && ent.fuel > 0) {
         const d = Math.hypot(ent.x - p.x, ent.y - p.y);
         if (d < 220) {
           const factor = 1 - d / 220;
@@ -1093,10 +1208,13 @@ export class GameRoom {
       if (def.category === 'pickable' && ent.ready) canAct = true;
       else if (ent.type === 'tallbird_nest' && ent.hasEgg) canAct = true;
       else if (def.isTrap && ent.caughtItem) canAct = true;
+      else if (def.isToothTrap && ent.sprung) canAct = true;
       else if (def.isCrockPot && ent.resultItem) canAct = true;
+      else if (def.isDryingRack && ent.driedItem) canAct = true;
       else if (def.workType === 'chop' && handDef?.chopPower) canAct = true;
       else if (def.workType === 'mine' && handDef?.minePower) canAct = true;
       else if (def.workType === 'dig' && handDef?.digPower) canAct = true;
+      else if (def.workType === 'net' && handDef?.netPower) canAct = true;
 
       if (canAct) {
         bestDist = d;
@@ -1104,7 +1222,10 @@ export class GameRoom {
       }
     }
 
-    if (bestId) p.interactTargetId = bestId;
+    if (bestId) {
+      p.interactTargetId = bestId;
+      p.altInteract = false;
+    }
   }
 
   _assignNearestAttackTarget(p) {
@@ -1225,9 +1346,115 @@ export class GameRoom {
 
     if (p.actionCooldown > 0) return;
 
+    // 进阶交互（Ctrl+左键：铁锤拆建返料、铁铲移植果苗、火把引燃烧炭！）
+    if (p.altInteract) {
+      p.altInteract = false;
+      p.interactTargetId = null;
+      const hand = p.equip[EQUIP_SLOTS.HAND];
+      const handDef = hand ? ITEMS[hand.id] : null;
+
+      // 1) 大铁锤拆毁建筑或猪人房
+      if (handDef?.hammerPower && (def.category === 'structure' || ent.type === 'pig_house' || ent.type === 'skeleton')) {
+        p.actionCooldown = 0.45;
+        p.swingAnim = 0.32;
+        this._consumeHandToolDurability(p, 1);
+        this._pushFx({ kind: 'mine', x: ent.x, y: ent.y });
+
+        if (ent.type === 'pig_house') {
+          this._spawnGroundItem('boards', 2, ent.x, ent.y);
+          this._spawnGroundItem('cut_stone', 1, ent.x + 14, ent.y);
+          this._spawnGroundItem('pig_skin', 2, ent.x - 14, ent.y + 8);
+        } else if (ent.type === 'skeleton') {
+          this._spawnGroundItem('rocks', 2, ent.x, ent.y);
+        } else {
+          // 返还建筑配方 50%（向上取整）材料，且掉出容器内物品！
+          const matchedRecipe = RECIPES.find((r) => r.structure === ent.type);
+          if (matchedRecipe) {
+            for (const c of matchedRecipe.cost) {
+              const refund = Math.max(1, Math.ceil(c.count * 0.5));
+              this._spawnGroundItem(c.id, refund, ent.x + (Math.random() - 0.5) * 24, ent.y + (Math.random() - 0.5) * 24);
+            }
+          }
+          if (ent.slots) {
+            for (const s of ent.slots) {
+              if (s) this._spawnGroundItem(s.id, s.count, ent.x, ent.y, s.durability, s.extra);
+            }
+          }
+          if (ent.driedItem) this._spawnGroundItem(ent.driedItem, 1, ent.x, ent.y);
+          if (ent.resultItem) this._spawnGroundItem(ent.resultItem, 1, ent.x, ent.y);
+        }
+        this.entities.delete(ent.id);
+        return;
+      }
+
+      // 2) 铁铲连根挖起浆果丛/干草丛/树枝苗用于基地移植！
+      if (handDef?.digPower && def.transplantItem) {
+        p.actionCooldown = 0.42;
+        p.swingAnim = 0.30;
+        this._consumeHandToolDurability(p, 1);
+        if (ent.ready && def.yieldItem) {
+          this._spawnGroundItem(def.yieldItem, def.yieldCount || 1, ent.x + 12, ent.y);
+        }
+        this._spawnGroundItem(def.transplantItem, 1, ent.x, ent.y);
+        this.entities.delete(ent.id);
+        this._pushFx({ kind: 'dig', x: ent.x, y: ent.y });
+        return;
+      }
+
+      // 3) 火把/打火机点燃树木烧制木炭！
+      if (handDef?.fireWeapon && def.flammable && !ent.burning) {
+        p.actionCooldown = 0.4;
+        p.swingAnim = 0.28;
+        ent.burning = 7.5;
+        this._pushFx({ kind: 'fire_burst', x: ent.x, y: ent.y });
+        this.clients.get(p.id)?.send({ type: 'toast', text: `🔥 已点燃【${def.name}】，燃尽后可砍伐获取木炭！` });
+        return;
+      }
+    }
+
     // 猪王换金块
     if (ent.type === 'pig_king') {
       this._tradeWithPigKing(p, ent);
+      p.interactTargetId = null;
+      return;
+    }
+
+    // 晾肉架挂肉与收取肉干
+    if (def.isDryingRack) {
+      if (ent.driedItem) {
+        this._addItemToPlayer(p, ent.driedItem, 1);
+        ent.driedItem = null;
+        ent.dryResult = null;
+        this._pushFx({ kind: 'pickup', x: ent.x, y: ent.y, playerId: p.id });
+      } else if (ent.dryingItem) {
+        const sec = Math.ceil(ent.dryTimer || 0);
+        this.clients.get(p.id)?.send({ type: 'toast', text: `🥩 正在风干【${ITEMS[ent.dryingItem]?.name}】，还需约 ${sec} 秒...` });
+      } else {
+        const meatIdx = p.inventory.findIndex((it) => it && ITEMS[it.id]?.dryResult);
+        if (meatIdx >= 0) {
+          const it = p.inventory[meatIdx];
+          ent.dryingItem = it.id;
+          ent.dryResult = ITEMS[it.id].dryResult;
+          ent.dryTimer = 48;
+          this._consumeSlotCount(p, meatIdx, 1);
+          this._pushFx({ kind: 'rustle', x: ent.x, y: ent.y });
+        } else {
+          this.clients.get(p.id)?.send({ type: 'toast', text: '🥩 携带生【大肉 / 小肉 / 怪物肉】点击晾肉架即可悬挂风干！' });
+        }
+      }
+      p.interactTargetId = null;
+      return;
+    }
+
+    // 犬牙陷阱重置或收回
+    if (def.isToothTrap) {
+      if (ent.sprung) {
+        ent.sprung = false;
+        this._pushFx({ kind: 'craft', x: ent.x, y: ent.y });
+      } else {
+        this._addItemToPlayer(p, 'tooth_trap_item', 1, ent.durability ?? 10);
+        this.entities.delete(ent.id);
+      }
       p.interactTargetId = null;
       return;
     }
@@ -1330,6 +1557,19 @@ export class GameRoom {
     }
   }
 
+  _consumeHandToolDurability(p, cost = 1) {
+    const hand = p.equip[EQUIP_SLOTS.HAND];
+    if (!hand) return;
+    const handDef = ITEMS[hand.id];
+    if (hand.durability !== null && hand.durability !== undefined) {
+      hand.durability -= cost;
+      if (hand.durability <= 0) {
+        p.equip[EQUIP_SLOTS.HAND] = null;
+        this.clients.get(p.id)?.send({ type: 'toast', text: `⚠️ 你的【${handDef?.name || '工具'}】用坏了！` });
+      }
+    }
+  }
+
   _performWorkOnEntity(p, ent, def) {
     const hand = p.equip[EQUIP_SLOTS.HAND];
     const handDef = hand ? ITEMS[hand.id] : null;
@@ -1337,10 +1577,11 @@ export class GameRoom {
     if (def.workType === 'chop') power = handDef?.chopPower || 0;
     else if (def.workType === 'mine') power = handDef?.minePower || 0;
     else if (def.workType === 'dig') power = handDef?.digPower || 0;
+    else if (def.workType === 'net') power = handDef?.netPower || 0;
 
     if (power <= 0) {
-      const needMap = { chop: '斧头', mine: '鹤嘴锄', dig: '铁铲' };
-      this.clients.get(p.id)?.send({ type: 'toast', text: `🪓 需要装备【${needMap[def.workType]}】才能作业！` });
+      const needMap = { chop: '斧头', mine: '鹤嘴锄', dig: '铁铲', net: '捕虫网' };
+      this.clients.get(p.id)?.send({ type: 'toast', text: `🛠️ 需要装备【${needMap[def.workType]}】才能作业！` });
       p.interactTargetId = null;
       return;
     }
@@ -1351,7 +1592,7 @@ export class GameRoom {
     p.actionCooldown = 0.42;
     p.swingAnim = 0.32;
     ent.hitsLeft -= power;
-    this._pushFx({ kind: def.workType, x: ent.x, y: ent.y });
+    this._pushFx({ kind: def.workType === 'net' ? 'rustle' : def.workType, x: ent.x, y: ent.y });
 
     // 雇佣的猪人小弟帮忙一起砍树！
     if (def.workType === 'chop') {
@@ -1363,14 +1604,7 @@ export class GameRoom {
       }
     }
 
-    // 消耗工具耐久
-    if (hand.durability !== null && hand.durability !== undefined) {
-      hand.durability -= 1;
-      if (hand.durability <= 0) {
-        p.equip[EQUIP_SLOTS.HAND] = null;
-        this.clients.get(p.id)?.send({ type: 'toast', text: `⚠️ 你的【${handDef.name}】用坏了！` });
-      }
-    }
+    this._consumeHandToolDurability(p, 1);
 
     if (ent.hitsLeft <= 0) {
       this._harvestDestroyedResource(p, ent);
@@ -1382,6 +1616,12 @@ export class GameRoom {
     const { x, y, type } = ent;
     const dayInfo = this.getDayInfo();
 
+    if (type === 'fireflies') {
+      this._addItemToPlayer(p, 'fireflies_item', 1);
+      this.entities.delete(ent.id);
+      this._pushFx({ kind: 'pickup', x, y, playerId: p.id });
+      return;
+    }
     if (type === 'pine_tree') {
       this._spawnGroundItem('log', 3, x, y);
       this._spawnGroundItem('pinecone', 2, x + 14, y + 8);
@@ -1479,7 +1719,13 @@ export class GameRoom {
       return;
     }
 
-    const reach = (target.radius || 18) + 52;
+    const hand = p.equip[EQUIP_SLOTS.HAND];
+    const handDef = hand ? ITEMS[hand.id] : null;
+    const isRangedWeapon = Boolean(handDef?.rangedDamage);
+    const reach = isRangedWeapon
+      ? (handDef.rangedRange || 265)
+      : (target.radius || 18) + 52;
+
     const d = Math.hypot(target.x - p.x, target.y - p.y);
     if (d > reach) {
       this._moveToward(p, target.x, target.y);
@@ -1489,28 +1735,46 @@ export class GameRoom {
     if (p.attackCooldown > 0) return;
 
     p.facing = target.x >= p.x ? 1 : -1;
-    p.attackCooldown = 0.48;
+    p.attackCooldown = isRangedWeapon ? 0.58 : 0.48;
     p.swingAnim = 0.30;
 
     // 计算玩家攻击力
-    const hand = p.equip[EQUIP_SLOTS.HAND];
-    const handDef = hand ? ITEMS[hand.id] : null;
-    const baseDmg = handDef?.damage || 10;
+    const baseDmg = isRangedWeapon ? handDef.rangedDamage : (handDef?.damage || 10);
     const charDef = CHARACTERS[p.charId] || CHARACTERS.wilson;
     let mult = charDef.damageMult || 1.0;
-    if (p.charId === 'wolfgang') {
+    if (!isRangedWeapon && p.charId === 'wolfgang') {
       if (p.hunger > 180) mult = 1.55;
       else if (p.hunger < 60) mult = 0.75;
     }
     const dmg = Math.round(baseDmg * mult);
 
-    // 消耗武器耐久
-    if (hand && hand.durability !== null && hand.durability !== undefined && !handDef.burnRate) {
-      hand.durability -= 1;
-      if (hand.durability <= 0) {
-        p.equip[EQUIP_SLOTS.HAND] = null;
-        this.clients.get(p.id)?.send({ type: 'toast', text: `⚠️ 你的【${handDef.name}】在激战中折断了！` });
+    // 远程武器发射投射物（吹箭消耗数量，回旋镖消耗耐久）
+    if (isRangedWeapon) {
+      this._spawnProjectile({
+        kind: handDef.isBoomerang ? 'boomerang' : 'dart',
+        x: p.x,
+        y: p.y - 16,
+        tx: target.x,
+        ty: target.y - 14,
+        speed: handDef.isBoomerang ? 380 : 540,
+        damage: dmg,
+        ownerPlayerId: p.id,
+        targetId: target.id,
+      });
+
+      if (handDef.consumeOnShot) {
+        hand.count = (hand.count || 1) - 1;
+        if (hand.count <= 0) p.equip[EQUIP_SLOTS.HAND] = null;
+      } else {
+        this._consumeHandToolDurability(p, 1);
       }
+      p.attackTargetId = null;
+      return;
+    }
+
+    // 消耗近战武器耐久
+    if (hand && hand.durability !== null && hand.durability !== undefined && !handDef.burnRate) {
+      this._consumeHandToolDurability(p, 1);
     }
 
     if (isPlayerTarget) {
@@ -1518,8 +1782,18 @@ export class GameRoom {
     } else if (isEntityTarget) {
       target.hp -= dmg;
       this._pushFx({ kind: 'hit', x: target.x, y: target.y, dmg });
-      if (target.type === 'spider_den' && (target.tier || 1) >= 2 && Math.random() < 0.35) {
-        this._spawnMob('spider_warrior', target.x + 24, target.y + 24, { targetId: p.id, state: 'chase' });
+      if (target.type === 'spider_den') {
+        if ((target.tier || 1) >= 3 && target.hp < target.maxHp * 0.55 && Math.random() < 0.35) {
+          // 三级蜘蛛巢受创概率蜕变为【蜘蛛女王 Boss】！
+          this.entities.delete(target.id);
+          this._spawnMob('spider_queen', target.x, target.y, { targetId: p.id, state: 'chase' });
+          this.broadcastBanner('🕷️ 三级蜘蛛巢剧烈蠕动，【巢穴母皇·蜘蛛女王】破茧而出！！', 'danger');
+          p.attackTargetId = null;
+          return;
+        }
+        if ((target.tier || 1) >= 2 && Math.random() < 0.35) {
+          this._spawnMob('spider_warrior', target.x + 24, target.y + 24, { targetId: p.id, state: 'chase' });
+        }
       }
       if (target.hp <= 0) {
         if (target.type === 'spider_den') {
@@ -1531,9 +1805,15 @@ export class GameRoom {
       }
     } else {
       this._damageMob(target, dmg, p);
-      // 玩家随从猪人锁定同一目标协助战斗
+      const wearingSpiderHat = ITEMS[p.equip[EQUIP_SLOTS.HEAD]?.id]?.spiderFriend;
+      // 玩家随从猪人、阿比盖尔或女王帽臣服蜘蛛锁定同一目标协助战斗！
       for (const ally of this.mobs.values()) {
-        if ((ally.type === 'pigman' && ally.leaderId === p.id) || (ally.type === 'abigail' && ally.ownerId === p.id)) {
+        if (ally.id === target.id) continue;
+        if (
+          (ally.type === 'pigman' && ally.leaderId === p.id) ||
+          (ally.type === 'abigail' && ally.ownerId === p.id) ||
+          (wearingSpiderHat && (ally.type === 'spider' || ally.type === 'spider_warrior') && Math.hypot(ally.x - p.x, ally.y - p.y) < 260)
+        ) {
           ally.targetId = target.id;
           ally.state = 'chase';
         }
@@ -1821,7 +2101,12 @@ export class GameRoom {
 
     // 沼泽触手与蜘蛛、猪人也会互相混战！（经典饥荒生态大乱斗）
     for (const p of this.players.values()) {
-      if (!p.isGhost && Math.hypot(p.x - mob.x, p.y - mob.y) < aggroRange) {
+      if (p.isGhost) continue;
+      // 佩戴蜘蛛女王帽的玩家不会被小蜘蛛与蜘蛛战士主动敌视！
+      if ((mob.type === 'spider' || mob.type === 'spider_warrior') && ITEMS[p.equip[EQUIP_SLOTS.HEAD]?.id]?.spiderFriend) {
+        continue;
+      }
+      if (Math.hypot(p.x - mob.x, p.y - mob.y) < aggroRange) {
         mob.targetId = p.id;
         return;
       }
@@ -1855,6 +2140,36 @@ export class GameRoom {
 
   _executeMobStrike(mob, def) {
     const reach = (def.attackRange || 50) + 26;
+
+    // 蜘蛛女王召唤蜘蛛护卫！
+    if (mob.type === 'spider_queen') {
+      const nearbyMinions = [...this.mobs.values()].filter(
+        (m) => (m.type === 'spider' || m.type === 'spider_warrior') && Math.hypot(m.x - mob.x, m.y - mob.y) < 350
+      );
+      if (nearbyMinions.length < 3 && Math.random() < 0.35) {
+        const childType = Math.random() < 0.3 ? 'spider_warrior' : 'spider';
+        this._spawnMob(childType, mob.x + mob.facing * 32, mob.y + 18, { targetId: mob.targetId, state: 'chase' });
+      }
+    }
+
+    // 发条主教远程紫电能量球发射（可横向走位躲避！）
+    if (def.isRanged) {
+      const target = this._resolveTargetEntity(mob.targetId);
+      if (!target) return;
+      this._spawnProjectile({
+        kind: 'bishop_orb',
+        x: mob.x + mob.facing * 18,
+        y: mob.y - 26,
+        tx: target.x,
+        ty: target.y - 12,
+        speed: 295,
+        damage: def.damage,
+        ownerMobId: mob.id,
+        ownerName: def.name,
+      });
+      this._pushFx({ kind: 'sizzle', x: mob.x, y: mob.y - 26 });
+      return;
+    }
 
     // 独眼巨鹿范围冰刺震击（伤害周围敌人 + 拆毁墙体建筑 + 冰冻降温！）
     if (mob.type === 'deerclops') {
@@ -2156,34 +2471,75 @@ export class GameRoom {
       return;
     }
 
-    // 6. 放置捕兽笼
-    if (def.placeEntity === 'trap_placed') {
+    // 6. 放置捕兽笼或犬牙陷阱
+    if (def.placeEntity === 'trap_placed' || def.placeEntity === 'tooth_trap') {
       const id = this.allocId('ent');
+      const isTooth = def.placeEntity === 'tooth_trap';
       this.entities.set(id, {
         id,
-        type: 'trap_placed',
+        type: def.placeEntity,
         x: Math.round(p.x + p.facing * 32),
         y: Math.round(p.y + 8),
         radius: 16,
-        durability: slot.durability ?? 8,
+        durability: slot.durability ?? (isTooth ? 10 : 8),
         caughtItem: null,
+        sprung: false,
       });
       this._consumeSlotCount(p, slotIndex, 1);
+      this._pushFx({ kind: 'build', x: p.x + p.facing * 32, y: p.y + 8 });
       return;
     }
 
-    // 7. 松果与桦木果种植（右键种植，桦木果左键无操作提示）
-    if (def.plantAs && secondary) {
+    // 6.5 萤火虫右键放生在营地作夜间微光 / 冰块右键扑灭附近火灾！
+    if (def.releaseEntity && secondary) {
+      const px = Math.round(p.x + p.facing * 26);
+      const py = Math.round(p.y + 6);
+      const id = this.allocId('ent');
+      this.entities.set(id, {
+        id,
+        type: def.releaseEntity,
+        x: px,
+        y: py,
+        radius: 12,
+        hitsLeft: 1,
+        ready: true,
+      });
+      this._consumeSlotCount(p, slotIndex, 1);
+      this._pushFx({ kind: 'heal', x: px, y: py, text: '✨ 放生流萤' });
+      return;
+    }
+
+    if (slot.id === 'ice' && secondary) {
+      let extinguished = 0;
+      for (const ent of this.entities.values()) {
+        if (ent.burning && Math.hypot(ent.x - p.x, ent.y - p.y) < 155) {
+          delete ent.burning;
+          extinguished++;
+        }
+      }
+      if (extinguished > 0) {
+        this._consumeSlotCount(p, slotIndex, 1);
+        this._pushFx({ kind: 'sizzle', x: p.x, y: p.y });
+        this.clients.get(p.id)?.send({ type: 'toast', text: `❄️ 用冰块成功扑灭了周围 ${extinguished} 处火焰！` });
+        return;
+      }
+    }
+
+    // 7. 松果、桦木果与连根灌木移植种植（右键种植；连根苗左键也直接种植更顺手！）
+    if (def.plantAs && (secondary || slot.id.startsWith('dug_'))) {
       const px = Math.round(p.x + p.facing * 36);
       const py = Math.round(p.y + 10);
+      const pDef = ENTITY_DEFS[def.plantAs];
       const id = this.allocId('ent');
+      const isDugBush = slot.id.startsWith('dug_');
       this.entities.set(id, {
         id,
         type: def.plantAs,
         x: px,
         y: py,
-        radius: 10,
-        ready: true,
+        radius: pDef?.radius || 12,
+        ready: !isDugBush,
+        regrowAt: isDugBush ? this.worldTime + 120 : 0,
       });
       this._consumeSlotCount(p, slotIndex, 1);
       this._pushFx({ kind: 'rustle', x: px, y: py });
@@ -2469,7 +2825,7 @@ export class GameRoom {
     if (resDef?.slot && !p.equip[resDef.slot]) {
       p.equip[resDef.slot] = {
         id: resDef.id,
-        count: 1,
+        count: recipe.result.count || 1,
         durability: resDef.maxDurability ?? null,
       };
     } else {
@@ -2711,6 +3067,95 @@ export class GameRoom {
     });
   }
 
+  // ==================== 远程投射物与团队战争迷雾探索 ====================
+  _spawnProjectile(cfg) {
+    const id = this.allocId('prj');
+    const dx = cfg.tx - cfg.x;
+    const dy = cfg.ty - cfg.y;
+    const len = Math.hypot(dx, dy) || 1;
+    this.projectiles.set(id, {
+      id,
+      kind: cfg.kind || 'dart',
+      x: cfg.x,
+      y: cfg.y,
+      vx: (dx / len) * (cfg.speed || 420),
+      vy: (dy / len) * (cfg.speed || 420),
+      damage: cfg.damage || 30,
+      ownerPlayerId: cfg.ownerPlayerId || null,
+      ownerMobId: cfg.ownerMobId || null,
+      ownerName: cfg.ownerName || '远程攻击',
+      life: 1.35,
+    });
+  }
+
+  _updateProjectiles(dt) {
+    for (const [id, prj] of this.projectiles.entries()) {
+      prj.life -= dt;
+      prj.x += prj.vx * dt;
+      prj.y += prj.vy * dt;
+      if (prj.life <= 0 || Math.abs(prj.x) > WORLD_HALF || Math.abs(prj.y) > WORLD_HALF) {
+        this.projectiles.delete(id);
+        continue;
+      }
+
+      if (prj.ownerPlayerId) {
+        const attacker = this.players.get(prj.ownerPlayerId) || null;
+        let hitDone = false;
+        for (const mob of this.mobs.values()) {
+          if (mob.type === 'abigail') continue;
+          if (mob.type === 'pigman' && mob.leaderId === prj.ownerPlayerId) continue;
+          if (Math.hypot(mob.x - prj.x, (mob.y - 14) - prj.y) < (mob.radius || 16) + 14) {
+            this._damageMob(mob, prj.damage, attacker);
+            hitDone = true;
+            break;
+          }
+        }
+        if (!hitDone && this.pvp) {
+          for (const op of this.players.values()) {
+            if (op.id !== prj.ownerPlayerId && !op.isGhost && Math.hypot(op.x - prj.x, (op.y - 16) - prj.y) < 24) {
+              this._damagePlayer(op, prj.damage, attacker?.name || '吹箭', false);
+              hitDone = true;
+              break;
+            }
+          }
+        }
+        if (hitDone) this.projectiles.delete(id);
+      } else if (prj.ownerMobId) {
+        for (const p of this.players.values()) {
+          if (!p.isGhost && Math.hypot(p.x - prj.x, (p.y - 16) - prj.y) < 24) {
+            this._damagePlayer(p, prj.damage, prj.ownerName, false);
+            this.projectiles.delete(id);
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  _updateTeamExploration() {
+    const ts = this.tileSize;
+    const cols = this.gridCols;
+    const radTiles = 5; // 周围 ~400px 视野点亮地图
+    for (const p of this.players.values()) {
+      const pc = Math.floor((p.x + WORLD_HALF) / ts);
+      const pr = Math.floor((p.y + WORLD_HALF) / ts);
+      for (let dr = -radTiles; dr <= radTiles; dr++) {
+        const r = pr + dr;
+        if (r < 0 || r >= cols) continue;
+        for (let dc = -radTiles; dc <= radTiles; dc++) {
+          if (dr * dr + dc * dc > radTiles * radTiles + 2) continue;
+          const c = pc + dc;
+          if (c < 0 || c >= cols) continue;
+          const idx = r * cols + c;
+          if (!this.exploredTiles.has(idx)) {
+            this.exploredTiles.add(idx);
+            this.newlyExplored.push(idx);
+          }
+        }
+      }
+    }
+  }
+
   // ==================== 视野同步与存档 ====================
   _buildMapLandmarks() {
     const marks = [];
@@ -2729,7 +3174,7 @@ export class GameRoom {
   }
 
   _sendSnapshots(dayInfo) {
-    // 所有在线玩家全局摘要（供大地图实时显示队友位置与状态！）
+    // 所有在线玩家全局摘要（供大地图与左上角队友栏实时显示位置与生命状态！）
     const allPlayersBrief = [];
     for (const p of this.players.values()) {
       allPlayersBrief.push({
@@ -2754,6 +3199,7 @@ export class GameRoom {
 
     const sendMapUpdate = this.tickCount % 30 === 0;
     const mapLandmarks = sendMapUpdate ? this._buildMapLandmarks() : undefined;
+    const exploredDelta = this.newlyExplored.length > 0 ? [...this.newlyExplored] : undefined;
 
     for (const [cid, client] of this.clients.entries()) {
       const me = this.players.get(cid);
@@ -2770,9 +3216,13 @@ export class GameRoom {
         };
         if (ent.ready === false) item.r = 0;
         if (ent.fuel !== undefined) item.f = Math.round(ent.fuel);
+        if (ent.burning > 0) item.b = 1;
         if (ent.tier) item.tr = ent.tier;
         if (ent.hasEgg) item.egg = 1;
         if (ent.caughtItem) item.ci = ent.caughtItem;
+        if (ent.sprung) item.sp = 1;
+        if (ent.dryingItem) item.di = ent.dryingItem;
+        if (ent.driedItem) item.dr = ent.driedItem;
         if (ent.cooking) item.ck = Math.ceil(ent.cookTimer);
         if (ent.resultItem) item.ri = ent.resultItem;
         if (ent.usedBy?.includes(me.playerKey)) item.used = 1;
@@ -2805,6 +3255,19 @@ export class GameRoom {
           c: gi.count,
           x: gi.x,
           y: gi.y,
+        });
+      }
+
+      const nearbyProjectiles = [];
+      for (const prj of this.projectiles.values()) {
+        if (Math.abs(prj.x - me.x) > VIEW_RADIUS || Math.abs(prj.y - me.y) > VIEW_RADIUS) continue;
+        nearbyProjectiles.push({
+          id: prj.id,
+          k: prj.kind,
+          x: Math.round(prj.x),
+          y: Math.round(prj.y),
+          vx: Math.round(prj.vx),
+          vy: Math.round(prj.vy),
         });
       }
 
@@ -2860,8 +3323,10 @@ export class GameRoom {
         entities: nearbyEntities,
         mobs: nearbyMobs,
         items: nearbyItems,
+        projectiles: nearbyProjectiles.length > 0 ? nearbyProjectiles : undefined,
         fx: nearbyFx.length > 0 ? nearbyFx : undefined,
         mapLandmarks,
+        exploredDelta,
       });
     }
   }
@@ -2896,7 +3361,7 @@ export class GameRoom {
     }
     const info = this.getDayInfo();
     const snapshot = {
-      saveVersion: 1,
+      saveVersion: 2,
       savedAt: Date.now(),
       roomName: this.name,
       pvp: this.pvp,
@@ -2909,6 +3374,7 @@ export class GameRoom {
       biomeOrder: this.biomeOrder,
       biomeGrid: this.biomeGrid,
       roads: this.roads,
+      exploredTiles: [...this.exploredTiles],
       nextId: this.nextId,
       startSeasonIdx: this.startSeasonIdx,
       worldTime: this.worldTime,
@@ -2938,6 +3404,7 @@ export class GameRoom {
     this.biomeOrder = snap.biomeOrder;
     this.biomeGrid = snap.biomeGrid;
     this.roads = snap.roads || [];
+    this.exploredTiles = new Set(snap.exploredTiles || []);
     this.nextId = snap.nextId || 5000;
     this.startSeasonIdx = snap.startSeasonIdx || 0;
     this.worldTime = snap.worldTime || 12;

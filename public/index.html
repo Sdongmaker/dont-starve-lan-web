@@ -141,6 +141,18 @@
       <button id="btn-leave-room" class="hud-btn btn-danger-subtle">🚪 大厅</button>
     </div>
 
+    <!-- 局域网联机队友实时状态栏 -->
+    <div id="team-roster" class="team-roster"></div>
+
+    <!-- 巨型 Boss 讨伐血条 -->
+    <div id="boss-hud" class="boss-hud hidden">
+      <div class="boss-hud-title" id="boss-hud-name">👁️ 冬季霸主·独眼巨鹿</div>
+      <div class="boss-hp-track">
+        <div class="boss-hp-fill" id="boss-hp-fill"></div>
+        <span class="boss-hp-text" id="boss-hp-text">2400 / 2400</span>
+      </div>
+    </div>
+
     <!-- 顶部中央世界横幅与浮动提示 -->
     <div id="event-banner" class="event-banner hidden"></div>
     <div id="toast-container" class="toast-container"></div>
@@ -241,10 +253,11 @@
     <div class="bottom-dock">
       <div class="controls-hint">
         <span><b>WASD/左键</b> 移动交互</span>
-        <span><b>空格</b> 自动采集/拾取</span>
-        <span><b>F</b> 自动攻击走A</span>
-        <span><b>右键物品</b> 烤肉/种树</span>
-        <span><b>Shift+点击</b> 丢弃</span>
+        <span><b>滚轮</b> 缩放视野</span>
+        <span><b>空格</b> 采集/拾取</span>
+        <span><b>F</b> 攻击走A</span>
+        <span><b>Ctrl+左键</b> 铁锤拆建/铲苗/点火</span>
+        <span><b>拖拽格子</b> 整理背包</span>
       </div>
       <div class="inventory-bar-wrap">
         <div id="inventory-slots" class="inventory-slots"></div>
@@ -253,6 +266,9 @@
       </div>
     </div>
 
+    <!-- 鼠标悬停世界实体智能操作提示 -->
+    <div id="cursor-action-hint" class="cursor-action-hint hidden"></div>
+
     <!-- 悬浮物品详情提示框 -->
     <div id="item-tooltip" class="item-tooltip hidden"></div>
 
@@ -260,7 +276,7 @@
     <div id="map-modal" class="modal-overlay hidden">
       <div class="map-modal-box parchment-card">
         <div class="modal-header">
-          <h2>🗺️ 荒野全境舆图（实时显示队友与基地地标）</h2>
+          <h2>🗺️ 荒野全境舆图（点击地图任意位置可向全队发送 📍 集合信号！）</h2>
           <button id="btn-close-map" class="icon-close">✕</button>
         </div>
         <div class="map-canvas-wrap">
@@ -273,8 +289,7 @@
             <span><i style="background:#7a7970"></i>乱石矿区</span>
             <span><i style="background:#483754"></i>毒雾沼泽</span>
             <span>⭐ 绿点：你与队友</span>
-            <span>⚡ 菱形：试金石</span>
-            <span>👑 皇冠：猪王</span>
+            <span>📍 点击地图：发送全队标记</span>
           </div>
         </div>
       </div>
@@ -293,20 +308,20 @@
             <p>白昼尽快收集<b>干草、树枝、燧石、浆果</b>，制作斧头砍树。黑夜降临前务必制作<b>火把</b>或放置<b>营火</b>！完全处于黑暗超过5秒会遭到【黑夜查理】致命袭击！</p>
           </div>
           <div class="guide-card">
-            <h3>🔬 科技与基地建设</h3>
-            <p>去东北<b>乱石矿区</b>挖金脉矿（或拿肉去西南桦木林找<b>猪王</b>换金块），建造<b>科学机器（一本）</b>与<b>炼金引擎（二本）</b>。站在机器旁即可解锁新配方，首次制作永久学会且<b>+15理智</b>！</p>
+            <h3>🔬 科技、烧炭与农庄移植</h3>
+            <p>手持火把<b>Ctrl+左键点击树木</b>可烧制木炭！装备<b>铁铲 Ctrl+左键</b>可将野生浆果丛/草丛连根挖回营地种植！放错建筑可用<b>大铁锤 Ctrl+左键</b>拆除返还一半材料！</p>
           </div>
           <div class="guide-card">
-            <h3>🍲 烹饪锅与食物</h3>
-            <p>站在营火旁<b>右键点击背包里的生食</b>可直接烤熟（烤绿蘑菇回+15理智！）。建造<b>烹饪锅</b>后，放入【1块怪物肉 + 3个浆果/蘑菇/冰块】即可炖出神级口粮<b>浓香肉丸</b>！</p>
+            <h3>🍲 烹饪锅与风干晾肉架</h3>
+            <p>站在营火旁<b>右键背包生食</b>可烤熟。建造<b>烹饪锅</b>放入【1块怪物肉+3浆果/冰】炖出浓香肉丸；建造<b>晾肉架</b>挂上生大肉可晒成三围全补的<b>风干肉脯</b>！</p>
           </div>
           <div class="guide-card">
             <h3>❄️ 四季与体温</h3>
             <p>每季5天：<b>冬季</b>需做冬帽、保暖石靠近火坑蓄热，提防<b>独眼巨鹿Boss</b>；<b>春季</b>多雨需猪皮伞/眼球伞防潮；<b>夏季</b>需<b>吸热冷火坑（硝石燃料）</b>与冰块防暑降温！</p>
           </div>
           <div class="guide-card">
-            <h3>⚔️ 走A战斗与复活</h3>
-            <p>怪物攻击有明显蓄力前摇，按 <b>F</b> 攻击两下后拉开一步即可无伤风筝！阵亡变鬼魂后，队友可用<b>救赎之心</b>救活你，或自己飘去找地图四角的<b>远古试金石</b>作祟复活！</p>
+            <h3>⚔️ 走A、狗牙阵与复活</h3>
+            <p>怪物攻击有红圈蓄力前摇，可用<b>吹箭/回旋镖</b>远程拉扯或铺设<b>犬牙陷阱大阵</b>！阵亡变鬼魂后，队友可用<b>救赎之心</b>救活你，或找四角<b>远古试金石</b>作祟复活！</p>
           </div>
         </div>
       </div>

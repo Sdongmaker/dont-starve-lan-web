@@ -1,11 +1,11 @@
-// 客户端总控入口：大厅交互、网络同步、键鼠操作与 60FPS 渲染调度
+// 客户端总控入口：大厅交互、网络同步、键鼠操作、智能交互提示与 60FPS 渲染调度
 import { NetClient } from './net.js';
 import { WorldRenderer } from './renderer.js';
 import { GameUI } from './ui.js';
 import { sound } from './audio.js';
-import { ENTITY_DEFS } from '../shared/entities.js';
+import { ENTITY_DEFS, MOB_DEFS } from '../shared/entities.js';
+import { ITEMS } from '../shared/items.js';
 
-// 持久化本地玩家身份标识（断线重连或读档自动恢复角色背包！）
 function getOrCreatePlayerToken() {
   let tk = localStorage.getItem('starve_player_token');
   if (!tk) {
@@ -26,7 +26,7 @@ const app = {
   worldStatic: null,
   latestState: null,
   mapLandmarks: [],
-  placementMode: null, // { recipeId, structure }
+  placementMode: null,
   mouseScreen: { x: 0, y: 0 },
   mouseWorld: { x: 0, y: 0 },
   hoverTarget: null,
@@ -42,6 +42,7 @@ const ui = new GameUI({
     const me = app.latestState?.players?.find((p) => p.id === app.selfId);
     return me?.charId || app.selectedCharId;
   },
+  getWorldStatic: () => app.worldStatic,
   onCraft: (recipeId) => {
     net.send({ type: 'craft', recipeId });
   },
@@ -53,6 +54,9 @@ const ui = new GameUI({
   },
   onUseSlot: (slotIndex, secondary) => {
     net.send({ type: 'use_slot', slotIndex, secondary });
+  },
+  onSwapSlot: (fromIdx, toIdx) => {
+    net.send({ type: 'swap_slot', fromIdx, toIdx });
   },
   onDropSlot: (slotIndex, one) => {
     net.send({ type: 'drop_slot', slotIndex, one });
@@ -66,6 +70,9 @@ const ui = new GameUI({
   onStartCooking: (entityId) => {
     net.send({ type: 'cook_pot_start', entityId });
   },
+  onMapPing: (x, y) => {
+    net.send({ type: 'map_ping', x, y });
+  },
   onCloseContainer: () => {
     if (app.latestState?.self) {
       net.send({ type: 'click_ground', x: renderer.camX, y: renderer.camY });
@@ -73,7 +80,7 @@ const ui = new GameUI({
   },
   onRequestCraftRefresh: () => {
     if (app.latestState) {
-      ui.updateHUD(app.latestState, app.selfId, app.worldStatic, app.mapLandmarks);
+      ui.updateHUD(app.latestState, app.selfId, app.worldStatic, app.mapLandmarks, renderer.mapPings);
     }
   },
 });
@@ -120,18 +127,20 @@ function handleServerMessage(msg) {
       app.latestState = null;
       app.placementMode = null;
 
-      ui.bakeStaticMap(msg.worldStatic);
+      ui.bakeStaticMap(msg.worldStatic, msg.explored || []);
       document.getElementById('lobby-screen').classList.add('hidden');
       document.getElementById('game-screen').classList.remove('hidden');
       document.getElementById('hud-room-title').textContent = `🏕️ ${msg.roomName}`;
       updateHostButtons();
       renderer.resize();
+      renderer.resetZoom();
       break;
     }
 
     case 'left_room': {
       app.inGame = false;
       app.latestState = null;
+      ui.updateCursorHint(null, 0, 0);
       document.getElementById('game-screen').classList.add('hidden');
       document.getElementById('lobby-screen').classList.remove('hidden');
       ui.renderLobbyLists(
@@ -156,6 +165,12 @@ function handleServerMessage(msg) {
       break;
     }
 
+    case 'map_ping': {
+      renderer.addMapPing(msg.sender, msg.x, msg.y, performance.now() / 1000);
+      sound.play('ping');
+      break;
+    }
+
     case 'state': {
       app.latestState = msg;
       if (msg.mapLandmarks) {
@@ -168,7 +183,7 @@ function handleServerMessage(msg) {
           else sound.play(fx.kind);
         }
       }
-      ui.updateHUD(msg, app.selfId, app.worldStatic, app.mapLandmarks);
+      ui.updateHUD(msg, app.selfId, app.worldStatic, app.mapLandmarks, renderer.mapPings);
       break;
     }
 
@@ -247,7 +262,6 @@ function initLobbyUI() {
   };
   selectChar(app.selectedCharId);
 
-  // 标签切换
   document.querySelectorAll('.tab-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
@@ -307,43 +321,111 @@ function cancelPlacement() {
   document.getElementById('placement-bar').classList.add('hidden');
 }
 
-// ==================== 游戏内鼠标点击与悬停目标检测 ====================
+// ==================== 游戏内鼠标悬停目标检测与智能操作提示 ====================
 function findTargetAtWorld(wx, wy) {
   const st = app.latestState;
   if (!st) return null;
 
-  // 1. 优先检测生物
   for (const mob of renderer.interpMobs.values()) {
     if (mob.t === 'abigail') continue;
-    if (Math.hypot(mob.x - wx, (mob.y - 16) - wy) < 34) {
-      return { kind: 'mob', id: mob.id, type: mob.t };
+    const hitR = MOB_DEFS[mob.t]?.isBoss ? 52 : 34;
+    if (Math.hypot(mob.x - wx, (mob.y - 16) - wy) < hitR) {
+      return { kind: 'mob', id: mob.id, type: mob.t, data: mob };
     }
   }
 
-  // 2. PvP 模式下其他玩家
   if (app.pvp) {
     for (const pl of renderer.interpPlayers.values()) {
       if (pl.id !== app.selfId && !pl.isGhost && Math.hypot(pl.x - wx, (pl.y - 18) - wy) < 28) {
-        return { kind: 'player', id: pl.id };
+        return { kind: 'player', id: pl.id, name: pl.name };
       }
     }
   }
 
-  // 3. 地面掉落物
   for (const gi of st.items) {
     if (Math.hypot(gi.x - wx, (gi.y - 6) - wy) < 24) {
-      return { kind: 'item', id: gi.id };
+      return { kind: 'item', id: gi.id, itemId: gi.i, count: gi.c };
     }
   }
 
-  // 4. 可交互/可采集/可攻击的世界实体
   for (const ent of st.entities) {
     const def = ENTITY_DEFS[ent.t];
     if (!def || ent.t === 'rabbit_hole') continue;
     const hitR = Math.max(24, (def.radius || 20) + 10);
     if (Math.hypot(ent.x - wx, (ent.y - 12) - wy) < hitR) {
-      return { kind: 'ent', id: ent.id, type: ent.t };
+      return { kind: 'ent', id: ent.id, type: ent.t, data: ent };
     }
+  }
+  return null;
+}
+
+function describeHoverAction(hit) {
+  if (!hit || app.placementMode) return null;
+  const self = app.latestState?.self;
+  if (!self) return null;
+
+  if (self.isGhost) {
+    if (hit.kind === 'ent' && (hit.type === 'touch_stone' || hit.type === 'portal')) {
+      return `👻 左键: 作祟【${ENTITY_DEFS[hit.type]?.name}】复活`;
+    }
+    if (hit.kind === 'item' && hit.itemId === 'life_amulet') {
+      return '👻 左键: 作祟【重生护符】复活';
+    }
+    return null;
+  }
+
+  const handId = self.equip?.hand?.id;
+  const handDef = handId ? ITEMS[handId] : null;
+
+  if (hit.kind === 'item') {
+    const nm = ITEMS[hit.itemId]?.name || hit.itemId;
+    return `✋ 左键: 拾取【${nm}${hit.count > 1 ? ` x${hit.count}` : ''}】`;
+  }
+  if (hit.kind === 'player') {
+    return `⚔️ 左键: 攻击玩家【${hit.name}】`;
+  }
+  if (hit.kind === 'mob') {
+    const mName = MOB_DEFS[hit.type]?.name || hit.type;
+    if (hit.type === 'pigman') {
+      return `🍖 左键: 喂肉雇佣【${mName}】 | ⚔️ Ctrl+左键: 强行攻击`;
+    }
+    const atkIcon = handDef?.rangedDamage ? '🎯 远程射击' : '⚔️ 攻击';
+    return `${atkIcon}: 【${mName}】`;
+  }
+  if (hit.kind === 'ent') {
+    const def = ENTITY_DEFS[hit.type];
+    const ent = hit.data;
+    if (!def) return null;
+
+    let mainAct = `🔍 查看【${def.name}】`;
+    if (hit.type === 'spider_den') mainAct = `⚔️ 左键: 攻击【${def.name}】`;
+    else if (hit.type === 'pig_king') mainAct = '👑 左键: 献上肉食换取黄金';
+    else if (def.isCrockPot) mainAct = ent.ri ? `🍲 左键: 收获【${ITEMS[ent.ri]?.name}】` : '🍲 左键: 打开烹饪锅';
+    else if (def.isDryingRack) mainAct = ent.dr ? `🥩 左键: 收取【${ITEMS[ent.dr]?.name}】` : '🥩 左键: 悬挂生肉风干';
+    else if (def.isContainer) mainAct = `📦 左键: 打开【${def.name}】`;
+    else if (def.isFire) mainAct = '🔥 左键: 添柴或烤熟生食';
+    else if (def.isTent) mainAct = '⛺ 左键: 黄昏/夜晚小睡恢复生命理智';
+    else if (def.isToothTrap) mainAct = ent.sp ? '⚙️ 左键: 重置犬牙陷阱' : '🪤 左键: 收起犬牙陷阱';
+    else if (def.isTrap) mainAct = ent.ci ? '🐰 左键: 收获猎物' : '🪤 左键: 收起捕兽笼';
+    else if (def.category === 'pickable') mainAct = ent.r === 0 ? `🌱 ${def.name}（生长中）` : `✋ 左键: 采集【${def.name}】`;
+    else if (def.workType === 'chop') mainAct = `🪓 左键: 砍伐【${def.name}】`;
+    else if (def.workType === 'mine') mainAct = `⛏️ 左键: 开采【${def.name}】`;
+    else if (def.workType === 'dig') mainAct = `🛠️ 左键: 铲除【${def.name}】`;
+    else if (def.workType === 'net') mainAct = `🕸️ 左键: 用捕虫网捕捉【${def.name}】`;
+
+    // 拼接手持特殊工具时的 Ctrl+左键 高阶提示！
+    const extras = [];
+    if (handDef?.hammerPower && (def.category === 'structure' || hit.type === 'pig_house' || hit.type === 'skeleton')) {
+      extras.push('🔨 Ctrl+左键: 铁锤拆毁返料');
+    }
+    if (handDef?.digPower && def.transplantItem) {
+      extras.push('🌱 Ctrl+左键: 连根铲起移植');
+    }
+    if (handDef?.fireWeapon && def.flammable && !ent.b) {
+      extras.push('🔥 Ctrl+左键: 点燃烧炭');
+    }
+
+    return extras.length > 0 ? `${mainAct}  |  ${extras.join(' ')}` : mainAct;
   }
   return null;
 }
@@ -354,7 +436,19 @@ function initInputHandlers() {
     app.mouseScreen.y = ev.clientY;
     app.mouseWorld = renderer.screenToWorld(ev.clientX, ev.clientY);
     app.hoverTarget = findTargetAtWorld(app.mouseWorld.x, app.mouseWorld.y);
+    ui.updateCursorHint(describeHoverAction(app.hoverTarget), ev.clientX, ev.clientY);
   });
+
+  canvas.addEventListener('mouseleave', () => {
+    ui.updateCursorHint(null, 0, 0);
+  });
+
+  // 鼠标滚轮平滑缩放视野！
+  canvas.addEventListener('wheel', (ev) => {
+    if (!app.inGame) return;
+    ev.preventDefault();
+    renderer.adjustZoom(ev.deltaY < 0 ? 0.1 : -0.1);
+  }, { passive: false });
 
   canvas.addEventListener('contextmenu', (ev) => {
     ev.preventDefault();
@@ -364,7 +458,14 @@ function initInputHandlers() {
   });
 
   canvas.addEventListener('mousedown', (ev) => {
-    if (!app.inGame || ev.button !== 0) return;
+    if (!app.inGame) return;
+    if (ev.button === 1) {
+      ev.preventDefault();
+      renderer.resetZoom();
+      return;
+    }
+    if (ev.button !== 0) return;
+
     const mw = renderer.screenToWorld(ev.clientX, ev.clientY);
 
     if (app.placementMode) {
@@ -390,13 +491,32 @@ function initInputHandlers() {
       net.send({ type: 'attack_target', targetId: hit.id });
     } else if (hit.kind === 'mob') {
       if (hit.type === 'pigman' && !ev.ctrlKey) {
-        // 默认左键猪人为投喂雇佣，按住 Ctrl 左键为强制攻击！
         net.send({ type: 'interact_target', targetId: hit.id });
       } else {
         net.send({ type: 'attack_target', targetId: hit.id });
       }
     } else if (hit.kind === 'ent') {
-      if (hit.type === 'spider_den' || (ev.ctrlKey && (hit.type === 'wood_wall' || hit.type === 'stone_wall'))) {
+      const handId = app.latestState?.self?.equip?.hand?.id;
+      const handDef = handId ? ITEMS[handId] : null;
+      const eDef = ENTITY_DEFS[hit.type];
+
+      // 按住 Ctrl 左键：优先检查铁锤拆建、铁铲挖苗、火把点火！
+      if (ev.ctrlKey) {
+        if (
+          (handDef?.hammerPower && (eDef?.category === 'structure' || hit.type === 'pig_house' || hit.type === 'skeleton')) ||
+          (handDef?.digPower && eDef?.transplantItem) ||
+          (handDef?.fireWeapon && eDef?.flammable)
+        ) {
+          net.send({ type: 'alt_interact_target', targetId: hit.id });
+          return;
+        }
+        if (hit.type === 'wood_wall' || hit.type === 'stone_wall' || hit.type === 'spider_den') {
+          net.send({ type: 'attack_target', targetId: hit.id });
+          return;
+        }
+      }
+
+      if (hit.type === 'spider_den') {
         net.send({ type: 'attack_target', targetId: hit.id });
       } else {
         net.send({ type: 'interact_target', targetId: hit.id });
@@ -404,7 +524,6 @@ function initInputHandlers() {
     }
   });
 
-  // 聊天输入框绑定
   const chatInput = document.getElementById('chat-input');
   const sendChat = () => {
     const text = chatInput.value.trim();
@@ -461,7 +580,6 @@ function initInputHandlers() {
       return;
     }
 
-    // 数字键 1~9、0 快捷使用背包前 10 格
     if (/^Digit[0-9]$/.test(code)) {
       const digit = Number(code.slice(5));
       const idx = digit === 0 ? 9 : digit - 1;
@@ -481,7 +599,6 @@ function initInputHandlers() {
   });
 }
 
-// 持续检测 WASD / 方向键发送移动向量
 function pollMovementInput() {
   if (!app.inGame) return;
   let mx = 0;
@@ -505,6 +622,22 @@ function frameLoop(now) {
   lastFrameTime = now;
 
   pollMovementInput();
+
+  if (app.inGame && app.latestState) {
+    const me = renderer.interpPlayers.get(app.selfId);
+    let nearFire = false;
+    if (me) {
+      for (const ent of app.latestState.entities) {
+        if ((ENTITY_DEFS[ent.t]?.isFire && (ent.f || 0) > 0) || ent.b) {
+          if (Math.hypot(ent.x - me.x, ent.y - me.y) < 220) {
+            nearFire = true;
+            break;
+          }
+        }
+      }
+    }
+    sound.tickAmbience(dt, nearFire, Boolean(app.latestState.world?.isRaining));
+  }
 
   if (app.inGame) {
     renderer.render({

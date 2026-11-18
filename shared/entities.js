@@ -83,19 +83,23 @@ export const ENTITY_DEFS = {
   // ==================== 可徒手采集资源 ====================
   grass_tuft: {
     type: 'grass_tuft', name: '干草丛', category: 'pickable',
-    radius: 14, solid: false, flammable: true,
+    radius: 14, solid: false, flammable: true, transplantItem: 'dug_grass',
     yieldItem: 'grass', yieldCount: 1, regrowTime: 240,
   },
   sapling: {
     type: 'sapling', name: '小树枝丛', category: 'pickable',
-    radius: 12, solid: false, flammable: true,
+    radius: 12, solid: false, flammable: true, transplantItem: 'dug_sapling',
     yieldItem: 'twigs', yieldCount: 1, regrowTime: 240,
   },
   berry_bush: {
     type: 'berry_bush', name: '浆果丛', category: 'pickable',
-    radius: 18, solid: false, flammable: true,
+    radius: 18, solid: false, flammable: true, transplantItem: 'dug_berry_bush',
     yieldItem: 'berries', yieldCount: 2, regrowTime: 300,
     mapColor: '#cf3434',
+  },
+  fireflies: {
+    type: 'fireflies', name: '林间流萤', category: 'resource',
+    radius: 12, solid: false, workType: 'net', workHits: 1, nightLightRadius: 72,
   },
   reeds_tuft: {
     type: 'reeds_tuft', name: '芦苇丛', category: 'pickable',
@@ -212,6 +216,15 @@ export const ENTITY_DEFS = {
     type: 'trap_placed', name: '捕兽草笼', category: 'structure',
     radius: 16, solid: false, isTrap: true,
   },
+  drying_rack: {
+    type: 'drying_rack', name: '风干晾肉架', category: 'structure',
+    radius: 24, solid: true, isDryingRack: true, maxHp: 250,
+    mapIcon: 'drying_rack', mapColor: '#a86b43',
+  },
+  tooth_trap: {
+    type: 'tooth_trap', name: '犬牙陷阱', category: 'structure',
+    radius: 16, solid: false, isToothTrap: true,
+  },
 };
 
 // 生物与 Boss 模板定义
@@ -284,6 +297,15 @@ export const MOB_DEFS = {
       { id: 'gears', count: 2, chance: 1.0 },
     ],
   },
+  clockwork_bishop: {
+    type: 'clockwork_bishop', name: '发条主教',
+    hp: 400, speed: 105, radius: 22, damage: 36, attackRange: 255,
+    windup: 0.52, cooldown: 2.2, behavior: 'territorial', isRanged: true, sanityAura: -14,
+    drops: [
+      { id: 'gears', count: 2, chance: 1.0 },
+      { id: 'nightmare_fuel', count: 1, chance: 0.7 },
+    ],
+  },
   hound: {
     type: 'hound', name: '荒野猎犬',
     hp: 150, speed: 168, radius: 16, damage: 22, attackRange: 46,
@@ -352,6 +374,16 @@ export const MOB_DEFS = {
       { id: 'eyeball', count: 1, chance: 1.0 },
       { id: 'meat', count: 8, chance: 1.0 },
       { id: 'ice', count: 4, chance: 1.0 },
+    ],
+  },
+  spider_queen: {
+    type: 'spider_queen', name: '巢穴母皇·蜘蛛女王', isBoss: true,
+    hp: 1250, speed: 102, radius: 34, damage: 55, attackRange: 74,
+    windup: 0.56, cooldown: 1.9, behavior: 'boss_spider', sanityAura: -30,
+    drops: [
+      { id: 'spider_hat', count: 1, chance: 1.0 },
+      { id: 'silk', count: 4, chance: 1.0 },
+      { id: 'monster_meat', count: 3, chance: 1.0 },
     ],
   },
 };

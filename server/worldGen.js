@@ -293,7 +293,7 @@ export function generateWorld(seedStr = 'starve-lan') {
     }
   }
 
-  // 4. 发条遗迹驻点（保障齿轮产出供冰箱与 WX-78 升级）
+  // 4. 发条遗迹驻点（保障齿轮产出供冰箱与 WX-78 升级，铁骑+远程主教组合）
   const clockSpots = [
     [rockyCenter.x + 280, rockyCenter.y - 220],
     [pigKingPos.x - 280, pigKingPos.y + 310],
@@ -302,7 +302,7 @@ export function generateWorld(seedStr = 'starve-lan') {
   for (const [cx, cy] of clockSpots) {
     if (Math.abs(cx) < WORLD_HALF - 160 && Math.abs(cy) < WORLD_HALF - 160) {
       addMob('clockwork_knight', cx, cy);
-      addMob('clockwork_knight', cx + 55, cy - 35);
+      addMob('clockwork_bishop', cx + 62, cy - 35);
     }
   }
 
@@ -333,18 +333,20 @@ export function generateWorld(seedStr = 'starve-lan') {
       else if (r < 0.92) {
         const hole = addEntity('rabbit_hole', x, y);
         if (hole) addMob('rabbit', x + 18, y + 12, { homeEntityId: hole.id });
-      } else if (r < 0.97) addEntity('pine_tree', x, y);
+      } else if (r < 0.96) addEntity('pine_tree', x, y);
+      else if (r < 0.985) addEntity('fireflies', x, y);
       else addGroundItem('flint', 1, x, y);
     } else if (biome === BIOMES.FOREST) {
       if (!canPlace(x, y, 52)) continue;
-      if (r < 0.54) addEntity('pine_tree', x, y, { stage: 1 + Math.floor(rand() * 3) });
-      else if (r < 0.63) addEntity('burnt_tree', x, y);
-      else if (r < 0.74) addEntity('sapling', x, y);
-      else if (r < 0.82) addEntity('berry_bush', x, y);
-      else if (r < 0.88) addEntity('mushroom_red', x, y);
-      else if (r < 0.93) addEntity('mushroom_green', x, y);
-      else if (r < 0.97 && Math.hypot(x, y) > 650 && canPlace(x, y, 160)) {
-        const tier = rand() < 0.3 ? 2 : 1;
+      if (r < 0.51) addEntity('pine_tree', x, y, { stage: 1 + Math.floor(rand() * 3) });
+      else if (r < 0.60) addEntity('burnt_tree', x, y);
+      else if (r < 0.70) addEntity('sapling', x, y);
+      else if (r < 0.78) addEntity('berry_bush', x, y);
+      else if (r < 0.84) addEntity('mushroom_red', x, y);
+      else if (r < 0.89) addEntity('mushroom_green', x, y);
+      else if (r < 0.94) addEntity('fireflies', x, y);
+      else if (r < 0.98 && Math.hypot(x, y) > 650 && canPlace(x, y, 160)) {
+        const tier = Math.hypot(x, y) > 1200 && rand() < 0.35 ? 3 : (rand() < 0.35 ? 2 : 1);
         const den = addEntity('spider_den', x, y, { tier, hp: 220 * tier, maxHp: 220 * tier });
         if (den) {
           addMob('spider', x + 28, y + 20, { homeEntityId: den.id });
@@ -354,11 +356,12 @@ export function generateWorld(seedStr = 'starve-lan') {
     } else if (biome === BIOMES.BIRCH) {
       if (Math.hypot(x - pigKingPos.x, y - pigKingPos.y) < 155) continue;
       if (!canPlace(x, y, 52)) continue;
-      if (r < 0.48) addEntity('birch_tree', x, y);
-      else if (r < 0.62) addEntity('sapling', x, y);
-      else if (r < 0.74) addEntity('grass_tuft', x, y);
-      else if (r < 0.84) addEntity('mushroom_green', x, y);
-      else if (r < 0.93) addEntity('flower', x, y);
+      if (r < 0.46) addEntity('birch_tree', x, y);
+      else if (r < 0.60) addEntity('sapling', x, y);
+      else if (r < 0.72) addEntity('grass_tuft', x, y);
+      else if (r < 0.81) addEntity('mushroom_green', x, y);
+      else if (r < 0.90) addEntity('flower', x, y);
+      else if (r < 0.95) addEntity('fireflies', x, y);
       else addEntity('berry_bush', x, y);
     } else if (biome === BIOMES.ROCKY) {
       if (!canPlace(x, y, 56)) continue;
